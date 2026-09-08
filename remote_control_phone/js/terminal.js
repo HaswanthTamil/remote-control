@@ -1,4 +1,4 @@
-import { SERVER_URL } from "../config.js/relayServer";
+import { REMOTE_TOKEN, SERVER_URL } from "../config";
 
 const form = document.getElementById("commandForm");
 const input = document.getElementById("commandInput");
@@ -49,6 +49,7 @@ function connect() {
       JSON.stringify({
         type: "register",
         device: "phone",
+        token: REMOTE_TOKEN,
       }),
     );
   });
