@@ -1,7 +1,14 @@
 import json
-import subprocess
+import os
+import pty
+import select
 import threading
+import time
 import uuid
+import signal
+import fcntl
+import errno
+import re
 
 import websocket
 
@@ -12,100 +19,236 @@ if not DEVICE_TOKEN:
     raise RuntimeError("REMOTE_CONTROL_TOKEN is not set")
 
 
-def send(ws, message):
-    ws.send(json.dumps(message))
+# Globals
+_master_fd = None
+_child_pid = None
+_reader_thread = None
+_ws = None
+_ws_lock = threading.Lock()
+_send_lock = threading.Lock()
+_cmd_lock = threading.Lock()
+_current_command_id = None
+_pending_exits = {}
+
+# Sentinel prefix (unique per agent run)
+_SENTINEL = f"__CMD_DONE__{uuid.uuid4().hex}__"
 
 
-def stream_output(ws, process, stream, message_type, command_id):
-    # Read process output line-by-line and forward it to the phone.
+def _set_nonblocking(fd):
+    flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+    fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+
+def spawn_persistent_shell():
+    global _master_fd, _child_pid
+
+    pid, master_fd = pty.fork()
+    if pid == 0:
+        # Child: become an interactive bash
+        os.execlp('bash', 'bash', '-i')
+
+    # Parent
+    _child_pid = pid
+    _master_fd = master_fd
     try:
-        for line in iter(stream.readline, ""):
-            if not line:
+        _set_nonblocking(_master_fd)
+    except Exception:
+        pass
+
+
+def send_ws(message):
+    global _ws
+    s = json.dumps(message)
+    with _send_lock:
+        try:
+            if _ws and getattr(_ws, 'sock', None) and getattr(_ws.sock, 'connected', False):
+                _ws.send(s)
+        except Exception:
+            # ignore send errors (will be retried on reconnect)
+            return
+
+
+def _reader_loop():
+    global _master_fd, _current_command_id, _pending_exits
+    buf = ''
+    # precompile regexes for stripping control sequences
+    osc_re = re.compile(r'\x1b\][^\x1b]*(?:\x1b\\|\x07)', re.DOTALL)
+    csi_re = re.compile(r'\x1b\[[0-9;?]*[ -/]*[@-~]')
+    c0_re = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
+
+    def _clean_text(s: str) -> str:
+        # remove OSC sequences (ESC ] ... ESC\ or BEL), CSI sequences, and other C0 controls
+        s = osc_re.sub('', s)
+        s = csi_re.sub('', s)
+        s = c0_re.sub('', s)
+        return s
+    while True:
+        if _master_fd is None:
+            time.sleep(0.1)
+            continue
+
+        try:
+            r, _, _ = select.select([_master_fd], [], [], 0.1)
+            if not r:
+                continue
+
+            data = os.read(_master_fd, 4096)
+            if not data:
+                time.sleep(0.1)
+                continue
+
+            chunk = data.decode('utf-8', errors='replace')
+            buf += chunk
+
+            # Process any complete sentinel markers.
+            while True:
+                idx = buf.find(_SENTINEL)
+                if idx == -1:
+                    # No sentinel yet; forward all and break
+                    if buf:
+                        cid = None
+                        with _cmd_lock:
+                            cid = _current_command_id
+
+                        send_ws({
+                            'type': 'output',
+                            'id': cid,
+                            'data': _clean_text(buf)
+                        })
+                        buf = ''
+                    break
+
+                # Found sentinel; split
+                before = buf[:idx]
+                rest = buf[idx + len(_SENTINEL):]
+
+                # forward 'before' as output (may be empty)
+                if before:
+                    cid = None
+                    with _cmd_lock:
+                        cid = _current_command_id
+
+                    send_ws({
+                        'type': 'output',
+                        'id': cid,
+                        'data': _clean_text(before)
+                    })
+
+                # Now parse the sentinel line which should be like: <command_id>:<exit>\n
+                nl = rest.find('\n')
+                if nl == -1:
+                    # sentinel not complete yet; wait for more
+                    buf = _SENTINEL + rest
+                    break
+
+                line = rest[:nl].strip()
+                buf = rest[nl+1:]
+
+                # line expected: <command_id>:<exit_code>
+                try:
+                    cmd_id, code_str = line.split(':', 1)
+                    code = int(code_str)
+                except Exception:
+                    # malformed sentinel; ignore
+                    continue
+
+                # Send exit message for that command id
+                send_ws({
+                    'type': 'exit',
+                    'id': cmd_id,
+                    'code': code
+                })
+
+                # If the finished command is the current_command, clear it
+                with _cmd_lock:
+                    if _current_command_id == cmd_id:
+                        _current_command_id = None
+
+        except OSError as e:
+            if e.errno in (errno.EIO, errno.EBADF):
+                # PTY closed
                 break
-
-            send(ws, {
-                "type": message_type,
-                "id": command_id,
-                "data": line
-            })
-    finally:
-        stream.close()
+            time.sleep(0.1)
+        except Exception:
+            time.sleep(0.1)
 
 
-def execute_command(ws, message):
-    command_id = message.get("id") or str(uuid.uuid4())
-    command = message.get("command")
+def _write_to_pty(data: bytes):
+    global _master_fd
+    if _master_fd is None:
+        raise RuntimeError('PTY not spawned')
+
+    os.write(_master_fd, data)
+
+
+def _handle_command(message):
+    global _current_command_id
+
+    command_id = message.get('id') or str(uuid.uuid4())
+    command = message.get('command')
 
     if not isinstance(command, str) or not command.strip():
-        send(ws, {
-            "type": "error",
-            "id": command_id,
-            "message": "Invalid command"
+        send_ws({
+            'type': 'error',
+            'id': command_id,
+            'message': 'Invalid command'
         })
         return
 
     print(f"[command] {command}")
 
-    send(ws, {
-        "type": "ack",
-        "id": command_id
+    # acknowledge immediately
+    send_ws({
+        'type': 'ack',
+        'id': command_id
     })
 
+    # Prepare wrapped command that prints sentinel with exit code when finished
+    wrapped = f"{command}\nprintf '\n{_SENTINEL}{command_id}:$?\n'\n"
+
+    with _cmd_lock:
+        _current_command_id = command_id
+
     try:
-        process = subprocess.Popen(
-            command,
-            shell=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1
-        )
-
-        stdout_thread = threading.Thread(
-            target=stream_output,
-            args=(ws, process, process.stdout, "output", command_id),
-            daemon=True
-        )
-
-        stderr_thread = threading.Thread(
-            target=stream_output,
-            args=(ws, process, process.stderr, "stderr", command_id),
-            daemon=True
-        )
-
-        stdout_thread.start()
-        stderr_thread.start()
-
-        exit_code = process.wait()
-
-        stdout_thread.join()
-        stderr_thread.join()
-
-        send(ws, {
-            "type": "exit",
-            "id": command_id,
-            "code": exit_code
+        _write_to_pty(wrapped.encode('utf-8'))
+    except Exception as e:
+        send_ws({
+            'type': 'error',
+            'id': command_id,
+            'message': str(e)
         })
 
-        print(f"[exit] {exit_code}")
 
-    except Exception as error:
-        print(f"[error] {error}")
+def _handle_signal(message):
+    sig = message.get('signal')
+    # map string names to actions
+    if not sig:
+        return
 
-        send(ws, {
-            "type": "error",
-            "id": command_id,
-            "message": str(error)
-        })
+    if sig.upper() == 'SIGINT':
+        # send Ctrl-C to the pty
+        try:
+            _write_to_pty(b"\x03")
+        except Exception:
+            pass
+        # also try sending to the child process
+        try:
+            if _child_pid:
+                os.kill(_child_pid, signal.SIGINT)
+        except Exception:
+            pass
 
 
 def on_open(ws):
-    print("[connected]")
+    global _ws
+    with _ws_lock:
+        _ws = ws
 
-    send(ws, {
-        "type": "register",
-        "device": "laptop",
-        "token": DEVICE_TOKEN
+    print('[connected]')
+    send_ws({
+        'type': 'register',
+        'device': 'laptop',
+        'token': DEVICE_TOKEN
     })
 
 
@@ -113,27 +256,24 @@ def on_message(ws, raw_message):
     try:
         message = json.loads(raw_message)
     except json.JSONDecodeError:
-        print("[error] Received invalid JSON")
+        print('[error] Received invalid JSON')
         return
 
-    message_type = message.get("type")
+    message_type = message.get('type')
 
-    if message_type == "registered":
-        print("[registered as laptop]")
+    if message_type == 'registered':
+        print('[registered as laptop]')
         return
 
-    if message_type == "command":
-        # Run each command in its own thread so the WebSocket
-        # remains responsive while the process is running.
-        threading.Thread(
-            target=execute_command,
-            args=(ws, message),
-            daemon=True
-        ).start()
-
+    if message_type == 'command':
+        threading.Thread(target=_handle_command, args=(message,), daemon=True).start()
         return
 
-    if message_type == "error":
+    if message_type == 'signal':
+        threading.Thread(target=_handle_signal, args=(message,), daemon=True).start()
+        return
+
+    if message_type == 'error':
         print(f"[server error] {message.get('message')}")
         return
 
@@ -145,27 +285,50 @@ def on_error(ws, error):
 
 
 def on_close(ws, close_status_code, close_message):
-    print(
-        f"[disconnected] "
-        f"code={close_status_code} message={close_message}"
-    )
+    global _ws
+    with _ws_lock:
+        _ws = None
+
+    print(f"[disconnected] code={close_status_code} message={close_message}")
+
+
+def connect_loop():
+    websocket.enableTrace(False)
+
+    backoff = 1.0
+    while True:
+        try:
+            ws_app = websocket.WebSocketApp(
+                SERVER_URL,
+                on_open=on_open,
+                on_message=lambda ws, msg: on_message(ws, msg),
+                on_error=on_error,
+                on_close=on_close,
+            )
+
+            print(f"[connecting] {SERVER_URL}")
+            # run_forever will block until disconnected
+            ws_app.run_forever()
+        except Exception as e:
+            print(f"[connect error] {e}")
+
+        # backoff before reconnect
+        time.sleep(backoff)
+        backoff = min(backoff * 2, 30)
 
 
 def main():
-    websocket.enableTrace(False)
+    # spawn PTY once and keep it across reconnects
+    spawn_persistent_shell()
 
-    ws = websocket.WebSocketApp(
-        SERVER_URL,
-        on_open=on_open,
-        on_message=on_message,
-        on_error=on_error,
-        on_close=on_close
-    )
+    # start reader thread
+    global _reader_thread
+    _reader_thread = threading.Thread(target=_reader_loop, daemon=True)
+    _reader_thread.start()
 
-    print(f"[connecting] {SERVER_URL}")
-
-    ws.run_forever()
+    # start websocket connect loop (blocks)
+    connect_loop()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
