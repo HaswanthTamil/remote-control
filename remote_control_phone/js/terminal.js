@@ -1,4 +1,4 @@
-import { REMOTE_TOKEN, SERVER_URL } from "../config";
+import { REMOTE_TOKEN, SERVER_URL } from "../config.js";
 
 const form = document.getElementById("commandForm");
 const input = document.getElementById("commandInput");

@@ -1,30 +1,29 @@
-import { REMOTE_TOKEN } from "./config";
-
-const http = require("http");
-const WebSocket = require("ws");
+import "dotenv/config";
+import http from "http";
+import WebSocket, { WebSocketServer } from "ws";
 
 const PORT = process.env.PORT || 3000;
-const DEVICE_TOKEN = process.env.DEVICE_TOKEN;
+const REMOTE_TOKEN = process.env.REMOTE_TOKEN;
 
-if (!DEVICE_TOKEN) {
-  throw new Error("DEVICE_TOKEN environment variable is required");
+if (!REMOTE_TOKEN) {
+  throw new Error("REMOTE_TOKEN environment variable is required");
 }
 
 const server = http.createServer((req, res) => {
   res.writeHead(200, {
-    "Content-Type": "text/plain"
+    "Content-Type": "text/plain",
   });
 
   res.end("Remote control relay is running\n");
 });
 
-const wss = new WebSocket.Server({
-  server
+const wss = new WebSocketServer({
+  server,
 });
 
 const clients = {
   phone: null,
-  laptop: null
+  laptop: null,
 };
 
 function send(ws, message) {
@@ -37,10 +36,10 @@ function send(ws, message) {
 }
 
 function registerClient(ws, device, token) {
-  if (token !== DEVICE_TOKEN) {
+  if (token !== REMOTE_TOKEN) {
     send(ws, {
       type: "error",
-      message: "Invalid device token"
+      message: "Invalid device token",
     });
 
     ws.close();
@@ -50,7 +49,7 @@ function registerClient(ws, device, token) {
   if (device !== "phone" && device !== "laptop") {
     send(ws, {
       type: "error",
-      message: "Invalid device type"
+      message: "Invalid device type",
     });
 
     ws.close();
@@ -69,7 +68,7 @@ function registerClient(ws, device, token) {
 
   send(ws, {
     type: "registered",
-    device
+    device,
   });
 
   return true;
@@ -87,7 +86,7 @@ wss.on("connection", (ws) => {
     } catch {
       send(ws, {
         type: "error",
-        message: "Invalid JSON"
+        message: "Invalid JSON",
       });
 
       return;
@@ -106,18 +105,14 @@ wss.on("connection", (ws) => {
       if (message.type !== "register") {
         send(ws, {
           type: "error",
-          message: "First message must be a register message"
+          message: "First message must be a register message",
         });
 
         ws.close();
         return;
       }
 
-      const registered = registerClient(
-        ws,
-        message.device,
-        message.token
-      );
+      const registered = registerClient(ws, message.device, message.token);
 
       if (registered) {
         ws.registered = true;
@@ -143,7 +138,7 @@ wss.on("connection", (ws) => {
       if (typeof message.command !== "string") {
         send(ws, {
           type: "error",
-          message: "Invalid command"
+          message: "Invalid command",
         });
 
         return;
@@ -154,13 +149,13 @@ wss.on("connection", (ws) => {
       if (delivered) {
         send(ws, {
           type: "ack",
-          id: message.id
+          id: message.id,
         });
       } else {
         send(ws, {
           type: "error",
           id: message.id,
-          message: "Laptop is not connected"
+          message: "Laptop is not connected",
         });
       }
 
@@ -198,7 +193,7 @@ wss.on("connection", (ws) => {
 
     send(ws, {
       type: "error",
-      message: `Unknown message type: ${message.type}`
+      message: `Unknown message type: ${message.type}`,
     });
   });
 
@@ -211,18 +206,10 @@ wss.on("connection", (ws) => {
   });
 
   ws.on("error", (error) => {
-    console.error(
-      `${ws.device || "unknown"} websocket error:`,
-      error.message
-    );
+    console.error(`${ws.device || "unknown"} websocket error:`, error.message);
   });
 });
 
 server.listen(PORT, () => {
   console.log(`Relay listening on port ${PORT}`);
 });
-
-
-
-
-
