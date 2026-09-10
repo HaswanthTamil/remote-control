@@ -181,7 +181,8 @@ wss.on("connection", (ws) => {
       message.type === "output" ||
       message.type === "stderr" ||
       message.type === "exit" ||
-      message.type === "error"
+      message.type === "error" ||
+      message.type === "ack"
     ) {
       if (ws.device !== "laptop") {
         return;
