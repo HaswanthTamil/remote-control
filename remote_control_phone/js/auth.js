@@ -106,10 +106,10 @@ export async function sign(keyPair, message) {
   return bytesToHex(signature);
 }
 
-export function isPaired() {
-  return localStorage.getItem(PAIRED_STORAGE) === "1";
+export function isPaired(relayHost) {
+  return localStorage.getItem(PAIRED_STORAGE + ":" + relayHost) === "1";
 }
 
-export function markPaired(deviceIdValue) {
-  localStorage.setItem(PAIRED_STORAGE, deviceIdValue || "1");
+export function markPaired(relayHost, deviceIdValue) {
+  localStorage.setItem(PAIRED_STORAGE + ":" + relayHost, deviceIdValue || "1");
 }

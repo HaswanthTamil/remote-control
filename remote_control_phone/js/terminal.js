@@ -12,6 +12,21 @@ const form = document.getElementById("commandForm");
 const input = document.getElementById("commandInput");
 const terminal = document.querySelector(".terminal");
 
+// Accept http(s):// in config the same way as ws(s)://.
+const relayUrl =
+  SERVER_URL.startsWith("https://")
+    ? "wss://" + SERVER_URL.slice("https://".length)
+    : SERVER_URL.startsWith("http://")
+      ? "ws://" + SERVER_URL.slice("http://".length)
+      : SERVER_URL;
+const relayHost = (() => {
+  try {
+    return new URL(relayUrl).host;
+  } catch {
+    return relayUrl;
+  }
+})();
+
 let socket = null;
 let reconnectTimer = null;
 let reconnectDelay = 1000;
@@ -51,7 +66,7 @@ function connect() {
 
   addLine("→ Connecting...", true);
 
-  socket = new WebSocket(SERVER_URL);
+  socket = new WebSocket(relayUrl);
 
   socket.addEventListener("open", () => {
     addLine("→ Connected, authenticating...", true);
@@ -64,7 +79,7 @@ function connect() {
       device_id: phoneDeviceId,
       public_key: phonePublicKey,
     };
-    if (!isPaired() && PAIR_TOKEN) {
+    if (!isPaired(relayHost) && PAIR_TOKEN) {
       register.pair_token = PAIR_TOKEN;
     }
 
@@ -96,7 +111,7 @@ function connect() {
       case "registered":
         authenticated = true;
         reconnectDelay = 1000;
-        markPaired(phoneDeviceId);
+        markPaired(relayHost, phoneDeviceId);
         addLine("→ Authenticated", true);
         input.disabled = false;
         input.focus();
@@ -207,7 +222,7 @@ form.addEventListener("submit", (event) => {
   phoneDeviceId = await deviceId(keyPair);
   phonePublicKey = await publicKeyHex(keyPair);
 
-  if (!isPaired() && !PAIR_TOKEN) {
+  if (!isPaired(relayHost) && !PAIR_TOKEN) {
     addLine("✗ Set PAIR_TOKEN in config.js to pair this phone", true);
     return;
   }
