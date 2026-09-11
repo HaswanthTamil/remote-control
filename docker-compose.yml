@@ -1,0 +1,21 @@
+services:
+  relay:
+    build:
+      context: ./relay-server
+    image: remote-control-relay:latest
+    container_name: remote-control-relay
+    ports:
+      - "3000:3000"
+    volumes:
+      - relay-keys:/data
+    # Credentials (PAIR_TOKEN, PORT, heartbeat tuning) come from the baked
+    # relay-server/.env inside the image. Override at runtime with:
+    #   docker compose run --rm -e PAIR_TOKEN=... relay
+    #   docker run --rm -e PAIR_TOKEN=... remote-control-relay:latest
+    read_only: true
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+
+volumes:
+  relay-keys:

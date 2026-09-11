@@ -41,6 +41,30 @@ npm install
 npm run dev
 ```
 
+**Or run the relay as a Docker image** (credentials baked in):
+
+```bash
+docker build -t remote-control-relay:latest relay-server
+docker run -d --name remote-control-relay \
+  -p 3000:3000 \
+  -v relay-keys:/data \
+  remote-control-relay:latest
+```
+
+or with compose:
+
+```bash
+docker compose up -d --build
+```
+
+- `PAIR_TOKEN`, `PORT` and heartbeat settings are baked into the image from
+  `relay-server/.env` (dotenv reads it at startup). Override per-run:
+  `docker run -e PAIR_TOKEN=...`.
+- Registered device keys persist in the `relay-keys` volume (mounted at
+  `/data`, non-root `node` user, root FS is read-only).
+- Healthcheck: `GET /` returns 200 while running.
+- The container owns `3000`; stop a locally-running relay first.
+
 ### 2. Laptop agent
 
 ```bash
