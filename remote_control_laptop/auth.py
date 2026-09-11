@@ -17,7 +17,13 @@ import dashboard
 _KEYS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "keys")
 PRIV_PATH = os.path.join(_KEYS_DIR, "id_ed25519")
 PUB_PATH = os.path.join(_KEYS_DIR, "id_ed25519.pub")
-PAIRED_PATH = os.path.join(_KEYS_DIR, "paired")
+
+
+def _marker_path(server_url):
+    """Pairing is per relay: each relay keeps its own keystore, so a device
+    must present PAIR_TOKEN once for every relay it connects to."""
+    digest = hashlib.sha1(server_url.encode("utf-8")).hexdigest()[:16]
+    return os.path.join(_KEYS_DIR, f"paired_{digest}")
 
 _PRIVATE = None
 
@@ -86,15 +92,16 @@ def sign(message):
     return _private_key().sign(message.encode("utf-8")).hex()
 
 
-def mark_paired():
-    with open(PAIRED_PATH, "w") as f:
+def mark_paired(server_url):
+    with open(_marker_path(server_url), "w") as f:
         f.write("1\n")
 
 
-def is_paired():
-    return os.path.exists(PAIRED_PATH)
+def is_paired(server_url):
+    return os.path.exists(_marker_path(server_url))
 
 
 def clear_paired():
-    if os.path.exists(PAIRED_PATH):
-        os.remove(PAIRED_PATH)
+    for name in os.listdir(_KEYS_DIR):
+        if name.startswith("paired_"):
+            os.remove(os.path.join(_KEYS_DIR, name))

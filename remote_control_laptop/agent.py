@@ -17,6 +17,19 @@ import auth
 import dashboard
 
 
+def _normalize_ws_url(url):
+    """websocket-client only accepts ws/wss. Accepting http(s) means a typo
+    (or a copied browser URL) can't break the reconnect loop."""
+    if url.startswith("https://"):
+        return "wss://" + url[len("https://"):]
+    if url.startswith("http://"):
+        return "ws://" + url[len("http://"):]
+    return url
+
+
+SERVER_URL = _normalize_ws_url(SERVER_URL)
+
+
 # Globals
 _master_fd = None
 _child_pid = None
@@ -289,7 +302,7 @@ def on_open(ws):
     # The one-time pair token is only sent while this device is not yet
     # registered with the relay; after the relay confirms registration it is
     # never sent again.
-    if not auth.is_paired() and PAIR_TOKEN:
+    if not auth.is_paired(SERVER_URL) and PAIR_TOKEN:
         register['pair_token'] = PAIR_TOKEN
 
     send_ws(register)
@@ -325,7 +338,7 @@ def on_message(ws, raw_message):
 
         # Server has persisted our public key; stop sending the pair token
         # in case the relay's keystore knows us from now on.
-        auth.mark_paired()
+        auth.mark_paired(SERVER_URL)
         return
 
     if message_type == 'command':
@@ -399,8 +412,8 @@ def main():
         relay_url=SERVER_URL,
         device_id=auth.device_id(),
         public_key=auth.public_key_hex(),
-        paired=auth.is_paired(),
-        pair_token_needed=bool(PAIR_TOKEN) and not auth.is_paired(),
+        paired=auth.is_paired(SERVER_URL),
+        pair_token_needed=bool(PAIR_TOKEN) and not auth.is_paired(SERVER_URL),
     )
 
     # spawn PTY once and keep it across reconnects
