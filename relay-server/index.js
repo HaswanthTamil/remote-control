@@ -338,12 +338,16 @@ wss.on("connection", (ws) => {
     }
   });
 
-  ws.on("close", () => {
+  ws.on("close", (code, reason) => {
     clearTimeout(ws.authTimer);
     if (ws.device && clients[ws.device] === ws) {
       clients[ws.device] = null;
     }
-    console.log(`${ws.device || "unregistered"} disconnected`);
+    console.log(
+      `[${new Date().toISOString().slice(11, 23)}] ${ws.device || "unregistered"} disconnected ` +
+        `code=${ws._closeCode ?? code} reason=${(reason || "").slice(0, 40)} ` +
+        `serverSentFrame=${ws._closeFrameSent === true} isAlive=${ws.isAlive}`,
+    );
   });
 
   ws.on("error", (error) => {
@@ -354,6 +358,9 @@ wss.on("connection", (ws) => {
 const heartbeat = setInterval(() => {
   for (const ws of wss.clients) {
     if (ws.isAlive === false) {
+      console.log(
+        `[${new Date().toISOString().slice(11, 23)}] heartbeat terminating ${ws.device || "unregistered"}`,
+      );
       ws.terminate();
       continue;
     }
