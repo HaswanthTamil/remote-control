@@ -1,4 +1,12 @@
-import { REMOTE_TOKEN, SERVER_URL } from "../config.js";
+import { PAIR_TOKEN, SERVER_URL } from "../config.js";
+import {
+  deviceId,
+  isPaired,
+  loadKeyPair,
+  markPaired,
+  publicKeyHex,
+  sign,
+} from "./auth.js";
 
 const form = document.getElementById("commandForm");
 const input = document.getElementById("commandInput");
@@ -7,6 +15,11 @@ const terminal = document.querySelector(".terminal");
 let socket = null;
 let reconnectTimer = null;
 let reconnectDelay = 1000;
+let authenticated = false;
+
+let keyPair = null;
+let phoneDeviceId = null;
+let phonePublicKey = null;
 
 function addLine(text, muted = false) {
   const line = document.createElement("div");
@@ -41,20 +54,24 @@ function connect() {
   socket = new WebSocket(SERVER_URL);
 
   socket.addEventListener("open", () => {
-    reconnectDelay = 1000;
+    addLine("→ Connected, authenticating...", true);
 
-    addLine("→ Connected", true);
+    // A brand-new phone (not yet in the relay keystore) needs the one-time
+    // pair token; once the relay confirms registration we stop sending it.
+    const register = {
+      type: "register",
+      device: "phone",
+      device_id: phoneDeviceId,
+      public_key: phonePublicKey,
+    };
+    if (!isPaired() && PAIR_TOKEN) {
+      register.pair_token = PAIR_TOKEN;
+    }
 
-    socket.send(
-      JSON.stringify({
-        type: "register",
-        device: "phone",
-        token: REMOTE_TOKEN,
-      }),
-    );
+    socket.send(JSON.stringify(register));
   });
 
-  socket.addEventListener("message", (event) => {
+  socket.addEventListener("message", async (event) => {
     let message;
 
     try {
@@ -65,6 +82,26 @@ function connect() {
     }
 
     switch (message.type) {
+      case "challenge":
+        // Sign the fresh, one-time nonce bound to this device id.
+        socket.send(
+          JSON.stringify({
+            type: "auth",
+            device_id: phoneDeviceId,
+            signature: await sign(keyPair, `${phoneDeviceId}:${message.nonce}`),
+          }),
+        );
+        break;
+
+      case "registered":
+        authenticated = true;
+        reconnectDelay = 1000;
+        markPaired(phoneDeviceId);
+        addLine("→ Authenticated", true);
+        input.disabled = false;
+        input.focus();
+        break;
+
       case "output":
         addOutput(message.data, "stdout");
         break;
@@ -94,6 +131,7 @@ function connect() {
   });
 
   socket.addEventListener("close", () => {
+    authenticated = false;
     socket = null;
 
     addLine("✗ Disconnected. Reconnecting...", true);
@@ -118,6 +156,10 @@ function scheduleReconnect() {
 }
 
 function sendCommand(command) {
+  if (!authenticated) {
+    addLine("✗ Not authenticated yet");
+    return;
+  }
   if (!socket || socket.readyState !== WebSocket.OPEN) {
     addLine("✗ Not connected to laptop");
     return;
@@ -151,5 +193,18 @@ form.addEventListener("submit", (event) => {
   input.focus();
 });
 
-connect();
-input.focus();
+(async () => {
+  keyPair = await loadKeyPair();
+  phoneDeviceId = await deviceId(keyPair);
+  phonePublicKey = await publicKeyHex(keyPair);
+
+  if (!isPaired() && !PAIR_TOKEN) {
+    addLine("✗ Set PAIR_TOKEN in config.js to pair this phone", true);
+    return;
+  }
+
+  input.disabled = true;
+  input.placeholder = "Pairing...";
+  connect();
+  input.focus();
+})();

@@ -12,11 +12,8 @@ import re
 
 import websocket
 
-from config import *
-
-
-if not DEVICE_TOKEN:
-    raise RuntimeError("REMOTE_CONTROL_TOKEN is not set")
+from config import SERVER_URL, PAIR_TOKEN
+import auth
 
 
 # Globals
@@ -29,6 +26,7 @@ _send_lock = threading.Lock()
 _cmd_lock = threading.Lock()
 _current_command_id = None
 _pending_exits = {}
+_CONN = {"backoff": 1.0}
 
 # Sentinel prefix (unique per agent run)
 _SENTINEL = f"__CMD_DONE__{uuid.uuid4().hex}__"
@@ -264,12 +262,23 @@ def on_open(ws):
     with _ws_lock:
         _ws = ws
 
-    print('[connected]')
-    send_ws({
+    _CONN["backoff"] = 1.0
+    print(f'[connected] device_id={auth.device_id()}')
+
+    register = {
         'type': 'register',
         'device': 'laptop',
-        'token': DEVICE_TOKEN
-    })
+        'device_id': auth.device_id(),
+        'public_key': auth.public_key_hex(),
+    }
+
+    # The one-time pair token is only sent while this device is not yet
+    # registered with the relay; after the relay confirms registration it is
+    # never sent again.
+    if not auth.is_paired() and PAIR_TOKEN:
+        register['pair_token'] = PAIR_TOKEN
+
+    send_ws(register)
 
 
 def on_message(ws, raw_message):
@@ -281,8 +290,26 @@ def on_message(ws, raw_message):
 
     message_type = message.get('type')
 
+    if message_type == 'challenge':
+        nonce = message.get('nonce')
+        if not isinstance(nonce, str) or not nonce:
+            print('[error] received invalid challenge')
+            return
+
+        # Signature binds this session's fresh nonce to this device's key.
+        send_ws({
+            'type': 'auth',
+            'device_id': auth.device_id(),
+            'signature': auth.sign(f"{auth.device_id()}:{nonce}")
+        })
+        return
+
     if message_type == 'registered':
         print('[registered as laptop]')
+
+        # Server has persisted our public key; stop sending the pair token
+        # in case the relay's keystore knows us from now on.
+        auth.mark_paired()
         return
 
     if message_type == 'command':
@@ -315,7 +342,6 @@ def on_close(ws, close_status_code, close_message):
 def connect_loop():
     websocket.enableTrace(False)
 
-    backoff = 1.0
     while True:
         try:
             ws_app = websocket.WebSocketApp(
@@ -327,14 +353,20 @@ def connect_loop():
             )
 
             print(f"[connecting] {SERVER_URL}")
-            # run_forever will block until disconnected
-            ws_app.run_forever()
+            # ping_interval/ping_timeout detect a dead relay from this side:
+            # if no pong comes back within 25s the connection is dropped and we
+            # reconnect.
+            ws_app.run_forever(
+                ping_interval=30,
+                ping_timeout=10,
+                ping_payload='',
+            )
         except Exception as e:
             print(f"[connect error] {e}")
 
         # backoff before reconnect
-        time.sleep(backoff)
-        backoff = min(backoff * 2, 30)
+        time.sleep(_CONN["backoff"])
+        _CONN["backoff"] = min(_CONN["backoff"] * 2, 30)
 
 
 def main():
