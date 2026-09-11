@@ -5,5 +5,8 @@ config.js
 .env.*
 !.env.example
 
+# device keystore (runtime state, contains registered public keys)
+devices.json
+
 node_modules
 
