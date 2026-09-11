@@ -42,6 +42,17 @@ client                                   relay
   exponential backoff.
 - Device slots (`clients.phone`, `clients.laptop`) only hold authenticated
   connections and are freed on close, so a dead peer frees its slot.
+- The relay is single-connection per device: a newer authenticated connection
+  for the same device closes the old one with close code `4001` ("replaced by
+  a newer connection"). Clients use that code to stop reconnecting, so two
+  tabs/agents cannot fight for the slot forever.
+
+### Local dashboard
+
+The agent serves a small operator page (logs, identity/pairing state, system
+vitals) on `http://127.0.0.1:<DASHBOARD_PORT>` via
+`remote_control_laptop/dashboard.py`. HTTP endpoints: `/api/state`,
+`/api/vitals`, `/api/logs?since=N` (polling). Loopback only: unauthenticated.
 
 ### Laptop agent (PTY-backed shell)
 
@@ -69,6 +80,7 @@ client                                   relay
 - `relay-server/devices.json` — runtime keystore of registered public keys (generated, gitignored).
 - `remote_control_laptop/agent.py` — laptop agent (PTY-backed shell + reconnect).
 - `remote_control_laptop/auth.py` — Ed25519 keypair generation/storage + signing.
+- `remote_control_laptop/dashboard.py` — local operator dashboard (HTTP + vitals + log buffer).
 - `remote_control_phone/js/auth.js` — browser WebCrypto Ed25519 identity.
 - `remote_control_phone/js/terminal.js` — phone terminal UI + auth handshake.
 - `run.sh` — starts relay and laptop agent together.

@@ -12,6 +12,8 @@ import os
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+import dashboard
+
 _KEYS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "keys")
 PRIV_PATH = os.path.join(_KEYS_DIR, "id_ed25519")
 PUB_PATH = os.path.join(_KEYS_DIR, "id_ed25519.pub")
@@ -54,9 +56,9 @@ def _private_key():
     with open(PUB_PATH, "w") as f:
         f.write(pub_hex + "\n")
 
-    print("[auth] generated new Ed25519 keypair")
-    print(f"[auth] public key: {pub_hex}")
-    print(f"[auth] device id:  {device_id()}")
+    dashboard.log("[auth] generated new Ed25519 keypair")
+    dashboard.log(f"[auth] public key: {pub_hex}")
+    dashboard.log(f"[auth] device id:  {device_id()}")
 
     return _PRIVATE
 

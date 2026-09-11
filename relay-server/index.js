@@ -224,9 +224,14 @@ function handleAuth(ws, message) {
   clearTimeout(ws.authTimer);
   ws.auth = null;
 
-  // Replace any older connection for the same device.
+  // Replace any older connection for the same device. Use an application
+  // close code so the loser can tell "I was superseded" apart from a real
+  // drop, and stop its reconnect loop.
   if (clients[auth.device] && clients[auth.device] !== ws) {
-    clients[auth.device].close();
+    console.log(
+      `[${new Date().toISOString().slice(11, 23)}] replacing old ${auth.device} connection (4001)`,
+    );
+    clients[auth.device].close(4001, "replaced by a newer connection");
   }
   clients[auth.device] = ws;
 

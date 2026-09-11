@@ -64,6 +64,28 @@ aliases, etc. persist between commands. If the relay is restarted, the agent
 reconnects automatically (with backoff) and re-authenticates with its stored
 key — no pairing token needed.
 
+**Run exactly one agent instance.** The relay allows a single connection per
+device; if two agents (or two phone tabs) are running, they fight for the
+slot and you get a connect/disconnect loop. The relay now closes the loser
+with close code `4001` ("replaced by a newer connection") and the phone page
+stops reconnecting when it sees that code. If you see the loop, stop the
+extra processes/tabs (refresh the browser tab to load the updated page).
+
+### 4. Local dashboard (laptop)
+
+The agent serves a small operator UI on the laptop at
+`http://<DASHBOARD_HOST>:<DASHBOARD_PORT>` (default `http://127.0.0.1:8787`,
+set in `remote_control_laptop/config.py` — note this config currently uses
+`8080`). Open it in a browser tab on the laptop. It shows:
+
+- Live logs (streamed from the agent)
+- Device identity (device id / fingerprint, public key)
+- Pairing + connection state (relay URL, registered?, reconnect backoff)
+- System vitals (CPU, memory, disk, load, uptime)
+
+It binds to loopback by default because it has no auth of its own — don't
+expose `DASHBOARD_HOST` to a network.
+
 ### 3. Phone
 
 Serve `remote_control_phone/` over HTTPS (web crypto `Ed25519` and module
@@ -106,6 +128,7 @@ to the PTY.
 1. Start the relay and the laptop agent (see above). Expect:
    - relay log: `paired new laptop: <id>...` then `laptop connected`
    - agent log: `[connected]`, `[registered as laptop]`
+   - laptop dashboard (http://127.0.0.1:8787): online pill + vitals populate
 2. Send a simple command from the phone: `echo hello`. Expect the output and
    a `--- process exited with code 0 ---` line.
 3. Send a failing command, e.g. `ls /nonexistent_path_xyz`. Expect the error

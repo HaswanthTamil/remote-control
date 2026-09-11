@@ -130,9 +130,18 @@ function connect() {
     }
   });
 
-  socket.addEventListener("close", () => {
+  socket.addEventListener("close", (event) => {
     authenticated = false;
     socket = null;
+
+    // The relay replaced this socket with a newer connection from the same
+    // device (another tab/window). That tab is now the active one, so don't
+    // reconnect and fight it.
+    if (event.code === 4001) {
+      addLine("✗ Superseded by a newer connection. Not reconnecting.", true);
+      input.disabled = true;
+      return;
+    }
 
     addLine("✗ Disconnected. Reconnecting...", true);
 

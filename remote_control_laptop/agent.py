@@ -12,8 +12,9 @@ import re
 
 import websocket
 
-from config import SERVER_URL, PAIR_TOKEN
+from config import DASHBOARD_HOST, DASHBOARD_PORT, PAIR_TOKEN, SERVER_URL
 import auth
+import dashboard
 
 
 # Globals
@@ -59,6 +60,8 @@ def spawn_persistent_shell():
         os.write(master_fd, b"stty -echo\n")
     except Exception:
         pass
+
+    dashboard.log(f"[pty] bash shell spawned (pid={_child_pid})")
 
 
 def send_ws(message):
@@ -176,6 +179,7 @@ def _reader_loop():
                 with _cmd_lock:
                     if _current_command_id == cmd_id:
                         _current_command_id = None
+                        dashboard.set_status(active_command=None)
 
                 # continue processing remaining buffer
                 continue
@@ -211,7 +215,8 @@ def _handle_command(message):
         })
         return
 
-    print(f"[command] {command}")
+    dashboard.log(f"[command] {command}")
+    dashboard.set_status(active_command=command)
 
     # acknowledge immediately
     send_ws({
@@ -230,6 +235,8 @@ def _handle_command(message):
     try:
         _write_to_pty(wrapped_cmd.encode('utf-8'))
     except Exception as e:
+        dashboard.log(f"[command error] {e}")
+        dashboard.set_status(active_command=None)
         send_ws({
             'type': 'error',
             'id': command_id,
@@ -263,7 +270,14 @@ def on_open(ws):
         _ws = ws
 
     _CONN["backoff"] = 1.0
-    print(f'[connected] device_id={auth.device_id()}')
+    dashboard.set_status(
+        connected=True,
+        registered=False,
+        reconnecting=False,
+        backoff=1.0,
+        last_error=None,
+    )
+    dashboard.log(f'[connected] device_id={auth.device_id()}')
 
     register = {
         'type': 'register',
@@ -293,10 +307,11 @@ def on_message(ws, raw_message):
     if message_type == 'challenge':
         nonce = message.get('nonce')
         if not isinstance(nonce, str) or not nonce:
-            print('[error] received invalid challenge')
+            dashboard.log('[error] received invalid challenge')
             return
 
         # Signature binds this session's fresh nonce to this device's key.
+        dashboard.log('[auth] challenge received, signing nonce')
         send_ws({
             'type': 'auth',
             'device_id': auth.device_id(),
@@ -305,7 +320,8 @@ def on_message(ws, raw_message):
         return
 
     if message_type == 'registered':
-        print('[registered as laptop]')
+        dashboard.log('[registered as laptop]')
+        dashboard.set_status(registered=True, paired=True, pair_token_needed=False)
 
         # Server has persisted our public key; stop sending the pair token
         # in case the relay's keystore knows us from now on.
@@ -321,14 +337,15 @@ def on_message(ws, raw_message):
         return
 
     if message_type == 'error':
-        print(f"[server error] {message.get('message')}")
+        dashboard.log(f"[server error] {message.get('message')}")
         return
 
-    print(f"[unknown message] {message}")
+    dashboard.log(f"[unknown message] {message}")
 
 
 def on_error(ws, error):
-    print(f"[websocket error] {error}")
+    dashboard.log(f"[websocket error] {error}")
+    dashboard.set_status(last_error=str(error))
 
 
 def on_close(ws, close_status_code, close_message):
@@ -336,7 +353,8 @@ def on_close(ws, close_status_code, close_message):
     with _ws_lock:
         _ws = None
 
-    print(f"[disconnected] code={close_status_code} message={close_message}")
+    dashboard.set_status(connected=False, registered=False, reconnecting=True)
+    dashboard.log(f"[disconnected] code={close_status_code} message={close_message}")
 
 
 def connect_loop():
@@ -352,17 +370,20 @@ def connect_loop():
                 on_close=on_close,
             )
 
-            print(f"[connecting] {SERVER_URL}")
+            dashboard.log(f"[connecting] {SERVER_URL}")
+            dashboard.set_status(backoff=_CONN["backoff"])
+
             # ping_interval/ping_timeout detect a dead relay from this side:
-            # if no pong comes back within 25s the connection is dropped and we
-            # reconnect.
+            # if no pong comes back within the timeout the connection is
+            # dropped and we reconnect.
             ws_app.run_forever(
                 ping_interval=30,
                 ping_timeout=10,
                 ping_payload='',
             )
         except Exception as e:
-            print(f"[connect error] {e}")
+            dashboard.log(f"[connect error] {e}")
+            dashboard.set_status(last_error=str(e))
 
         # backoff before reconnect
         time.sleep(_CONN["backoff"])
@@ -370,11 +391,22 @@ def connect_loop():
 
 
 def main():
+    global _reader_thread
+
+    dashboard.init(DASHBOARD_HOST, DASHBOARD_PORT)
+    dashboard.start()
+    dashboard.set_status(
+        relay_url=SERVER_URL,
+        device_id=auth.device_id(),
+        public_key=auth.public_key_hex(),
+        paired=auth.is_paired(),
+        pair_token_needed=bool(PAIR_TOKEN) and not auth.is_paired(),
+    )
+
     # spawn PTY once and keep it across reconnects
     spawn_persistent_shell()
 
     # start reader thread
-    global _reader_thread
     _reader_thread = threading.Thread(target=_reader_loop, daemon=True)
     _reader_thread.start()
 
