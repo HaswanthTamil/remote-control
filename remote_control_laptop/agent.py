@@ -55,6 +55,13 @@ def spawn_persistent_shell():
     except Exception:
         pass
 
+    # Disable terminal echo for the life of the shell so command lines (and
+    # the sentinel inside them) are never echoed back into the output stream.
+    try:
+        os.write(master_fd, b"stty -echo\n")
+    except Exception:
+        pass
+
 
 def send_ws(message):
     global _ws
@@ -81,6 +88,8 @@ def _reader_loop():
         s = osc_re.sub('', s)
         s = csi_re.sub('', s)
         s = c0_re.sub('', s)
+        # normalize line endings so phone renders one line per row
+        s = s.replace('\r\n', '\n').replace('\r', '\n')
         return s
     while True:
         if _master_fd is None:
@@ -105,16 +114,19 @@ def _reader_loop():
                 idx = buf.find(_SENTINEL)
                 if idx == -1:
                     # No sentinel yet; forward all and break
+                    
                     if buf:
                         cid = None
                         with _cmd_lock:
                             cid = _current_command_id
 
-                        send_ws({
-                            'type': 'output',
-                            'id': cid,
-                            'data': _clean_text(buf)
-                        })
+                        # Only forward output when associated with a running command
+                        if cid is not None:
+                            send_ws({
+                                'type': 'output',
+                                'id': cid,
+                                'data': _clean_text(buf)
+                            })
                         buf = ''
                     break
 
@@ -128,11 +140,14 @@ def _reader_loop():
                     with _cmd_lock:
                         cid = _current_command_id
 
-                    send_ws({
-                        'type': 'output',
-                        'id': cid,
-                        'data': _clean_text(before)
-                    })
+                    cleaned_before = _clean_text(before)
+
+                    if cleaned_before and cid is not None:
+                        send_ws({
+                            'type': 'output',
+                            'id': cid,
+                            'data': cleaned_before
+                        })
 
                 # Now parse the sentinel line which should be like: <command_id>:<exit>\n
                 nl = rest.find('\n')
@@ -163,6 +178,9 @@ def _reader_loop():
                 with _cmd_lock:
                     if _current_command_id == cmd_id:
                         _current_command_id = None
+
+                # continue processing remaining buffer
+                continue
 
         except OSError as e:
             if e.errno in (errno.EIO, errno.EBADF):
@@ -203,14 +221,16 @@ def _handle_command(message):
         'id': command_id
     })
 
-    # Prepare wrapped command that prints sentinel with exit code when finished
-    wrapped = f"{command}\nprintf '\n{_SENTINEL}{command_id}:$?\n'\n"
+    # Terminal echo was disabled at shell spawn, so the command is not echoed.
+    # Run the command, then print a sentinel carrying its id and exit code on
+    # its own line. $? must stay out of single quotes so bash expands it.
+    wrapped_cmd = f"{command}; printf \"\\n{_SENTINEL}{command_id}:$?\\n\"\n"
 
     with _cmd_lock:
         _current_command_id = command_id
 
     try:
-        _write_to_pty(wrapped.encode('utf-8'))
+        _write_to_pty(wrapped_cmd.encode('utf-8'))
     except Exception as e:
         send_ws({
             'type': 'error',
