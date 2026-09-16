@@ -8,9 +8,9 @@
 //   appId: "YOUR_APP_ID"
 // };
 
-export const SERVER_URL = "ws://localhost:3000";
+// export const SERVER_URL = "ws://localhost:3000";
 // export const SERVER_URL = "wss://relay-server-remote-control.onrender.com/";
-// export const SERVER_URL = "wss://remote-control-lmxu.vercel.app/";
+export const SERVER_URL = "wss://remote-control-lmxu.vercel.app/";
 
 
 // One-time pairing token. The relay only accepts a brand-new public key if
