@@ -70,6 +70,11 @@ docker compose up -d --build
 On Railway, deploy the `relay-server/` directory (Dockerfile) and attach a
 volume at `/data` so registrations survive redeploys.
 
+**Vercel:** the server's filesystem is read-only, so the JSON keystore cannot
+be written. Set `KEYSTORE=sqlite` plus `TURSO_URL` and `TURSO_AUTH_TOKEN`
+(pointing at a free Turso database) in the project's env vars; device
+registrations then persist in the database instead of `devices.json`.
+
 ### 2. Laptop agent
 
 ```bash

@@ -5,6 +5,7 @@ import path from "path";
 import crypto from "crypto";
 import { fileURLToPath } from "url";
 import WebSocket, { WebSocketServer } from "ws";
+import { createClient } from "@libsql/client";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -13,37 +14,120 @@ const PAIR_TOKEN = process.env.PAIR_TOKEN;
 const HEARTBEAT_INTERVAL = parseInt(process.env.HEARTBEAT_INTERVAL || "20000", 10);
 const AUTH_TIMEOUT = parseInt(process.env.AUTH_TIMEOUT_MS || "10000", 10);
 const KEYS_FILE = process.env.KEYS_FILE || path.join(__dirname, "devices.json");
+const KEYSTORE = process.env.KEYSTORE || "file"; // "file" | "sqlite"
+const TURSO_URL = process.env.TURSO_URL; // https://<db>-<org>.turso.io or file:/path/to.db
+const TURSO_AUTH_TOKEN = process.env.TURSO_AUTH_TOKEN;
 
 if (!PAIR_TOKEN) {
   throw new Error("PAIR_TOKEN environment variable is required");
 }
 
 /* ------------------------------------------------------------------ */
-/*  Device keystore: device_id -> { public_key, device, paired_at }    */
+/*  Device keystore backend: device_id -> { public_key, device,        */
+/*  paired_at }.                                                       */
+/*                                                                     */
+/*  "file"   = devices.json (default; works on Docker/VPS with a       */
+/*             volume mounted at KEYS_FILE).                           */
+/*  "sqlite" = Turso/libSQL (works on Vercel's read-only filesystem,   */
+/*             registered devices survive redeploys).                  */
 /* ------------------------------------------------------------------ */
 
-let devices = {};
+function createFileKeystore() {
+  let devices = {};
 
-function loadKeystore() {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(KEYS_FILE, "utf8"));
-    if (parsed && typeof parsed.devices === "object" && parsed.devices) {
-      devices = parsed.devices;
+  const load = () => {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(KEYS_FILE, "utf8"));
+      if (parsed && typeof parsed.devices === "object" && parsed.devices) {
+        devices = parsed.devices;
+      }
+    } catch (err) {
+      if (err.code !== "ENOENT") {
+        console.error("Could not read keystore:", err.message);
+      }
     }
-  } catch (err) {
-    if (err.code !== "ENOENT") {
-      console.error("Could not read keystore:", err.message);
+  };
+
+  const save = () => {
+    const tmp = `${KEYS_FILE}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ version: 1, devices }, null, 2));
+    fs.renameSync(tmp, KEYS_FILE);
+  };
+
+  load();
+
+  return {
+    get: async (id) => devices[id] || null,
+    put: async (id, record) => {
+      devices[id] = record;
+      save();
+    },
+    count: async () => Object.keys(devices).length,
+  };
+}
+
+function createSqliteKeystore() {
+  const db = createClient({ url: TURSO_URL, authToken: TURSO_AUTH_TOKEN });
+
+  return {
+    raw: async (sql, args) => {
+      if (args) {
+        return db.execute({ sql, args });
+      }
+      return db.execute(sql);
+    },
+    get: async (id) => {
+      const res = await db.execute({
+        sql: "SELECT public_key, device, paired_at FROM devices WHERE device_id = ?",
+        args: [id],
+      });
+      if (res.rows.length === 0) {
+        return null;
+      }
+      return {
+        public_key: String(res.rows[0].public_key),
+        device: String(res.rows[0].device),
+        paired_at: String(res.rows[0].paired_at),
+      };
+    },
+    put: async (id, record) => {
+      await db.execute({
+        sql:
+          "INSERT INTO devices (device_id, public_key, device, paired_at) VALUES (?, ?, ?, ?) " +
+          "ON CONFLICT(device_id) DO UPDATE SET public_key=excluded.public_key, " +
+          "device=excluded.device, paired_at=excluded.paired_at",
+        args: [id, record.public_key, record.device, record.paired_at],
+      });
+    },
+    count: async () => {
+      const res = await db.execute("SELECT COUNT(*) AS n FROM devices");
+      return Number(res.rows[0].n);
+    },
+  };
+}
+
+async function createKeystore() {
+  if (KEYSTORE === "sqlite") {
+    if (!TURSO_URL) {
+      throw new Error(
+        "KEYSTORE=sqlite requires TURSO_URL (and TURSO_AUTH_TOKEN for a remote Turso database)",
+      );
     }
+    const store = createSqliteKeystore();
+    await store.raw("CREATE TABLE IF NOT EXISTS devices (" +
+      "device_id TEXT PRIMARY KEY, " +
+      "public_key TEXT NOT NULL, " +
+      "device TEXT NOT NULL, " +
+      "paired_at TEXT NOT NULL)");
+    return store;
   }
+  return createFileKeystore();
 }
 
-function saveKeystore() {
-  const tmp = `${KEYS_FILE}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify({ version: 1, devices }, null, 2));
-  fs.renameSync(tmp, KEYS_FILE);
-}
-
-loadKeystore();
+const keystore = await createKeystore().catch((err) => {
+  console.error(err.message);
+  process.exit(1);
+});
 
 /* ------------------------------------------------------------------ */
 /*  Crypto helpers (Ed25519 public-key auth)                           */
@@ -140,7 +224,7 @@ function failAuth(ws, message) {
 /*    "ready"       -> routing only                                    */
 /* ------------------------------------------------------------------ */
 
-function handleRegister(ws, message) {
+async function handleRegister(ws, message) {
   const { device, device_id, public_key, pair_token } = message;
 
   if (device !== "phone" && device !== "laptop") {
@@ -163,7 +247,13 @@ function handleRegister(ws, message) {
     return failAuth(ws, "device_id does not match public_key");
   }
 
-  const known = devices[device_id];
+  let known;
+  try {
+    known = await keystore.get(device_id);
+  } catch (err) {
+    console.error("keystore read error:", err.message);
+    return failAuth(ws, "Keystore unavailable");
+  }
 
   if (!known) {
     // One-time pairing: a fresh key is accepted only with the bootstrap token.
@@ -171,12 +261,16 @@ function handleRegister(ws, message) {
       return failAuth(ws, "Device not paired and pair_token invalid");
     }
 
-    devices[device_id] = {
-      public_key,
-      device,
-      paired_at: new Date().toISOString(),
-    };
-    saveKeystore();
+    try {
+      await keystore.put(device_id, {
+        public_key,
+        device,
+        paired_at: new Date().toISOString(),
+      });
+    } catch (err) {
+      console.error("keystore write error:", err.message);
+      return failAuth(ws, "Keystore unavailable");
+    }
     console.log(`paired new ${device}: ${device_id.slice(0, 16)}...`);
   } else if (known.public_key !== public_key) {
     return failAuth(ws, "public_key does not match registered key");
@@ -325,7 +419,10 @@ wss.on("connection", (ws) => {
     switch (ws.phase) {
       case "init":
         if (message.type === "register") {
-          return handleRegister(ws, message);
+          handleRegister(ws, message).catch((err) => {
+            console.error("register error:", err.message);
+          });
+          return;
         }
         return failAuth(ws, "First message must be a register message");
 
@@ -378,7 +475,11 @@ wss.on("close", () => {
   clearInterval(heartbeat);
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
   console.log(`Relay listening on port ${PORT}`);
-  console.log(`Authenticated devices: ${Object.keys(devices).length}`);
+  try {
+    console.log(`Authenticated devices: ${await keystore.count()}`);
+  } catch (err) {
+    console.error("keystore count error:", err.message);
+  }
 });
