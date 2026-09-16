@@ -9,10 +9,11 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV KEYS_FILE=/data/devices.json
 
-# Runtime credentials (PAIR_TOKEN, PORT, heartbeat tuning) are baked into the
-# image from relay-server/.env. Override at runtime with
-# `docker run -e PAIR_TOKEN=...` if you do not want the baked value used.
-COPY .env ./
+# Runtime configuration (PAIR_TOKEN, PORT, heartbeat tuning) is supplied via
+# environment variables at deploy time (Railway dashboard: Variables -> click
+# "New Variable", name PAIR_TOKEN; or `docker run -e PAIR_TOKEN=...`).
+# The local relay-server/.env file is for development only and is excluded
+# from the image so the secret is never published.
 COPY index.js ./
 COPY --from=deps /app/node_modules ./node_modules
 

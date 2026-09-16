@@ -41,14 +41,14 @@ npm install
 npm run dev
 ```
 
-**Or run the relay as a Docker image** (credentials baked in):
+**Or run the relay as a Docker image:**
 
 ```bash
-docker build -t remote-control-relay:latest relay-server
 docker run -d --name remote-control-relay \
+  -e PAIR_TOKEN=your-cluster-secret \
   -p 3000:3000 \
   -v relay-keys:/data \
-  remote-control-relay:latest
+  haswanthtamil/relay-server:latest
 ```
 
 or with compose:
@@ -57,13 +57,18 @@ or with compose:
 docker compose up -d --build
 ```
 
-- `PAIR_TOKEN`, `PORT` and heartbeat settings are baked into the image from
-  `relay-server/.env` (dotenv reads it at startup). Override per-run:
-  `docker run -e PAIR_TOKEN=...`.
+- `PAIR_TOKEN` is required and is set via environment variables at deploy
+  time (the local `relay-server/.env` is excluded from the image so the
+  secret is never published). Railway: set a `PAIR_TOKEN` variable in the
+  dashboard; it will pass through to the container.
+- `PORT` defaults to 3000 (Railway injects its own `PORT` automatically).
 - Registered device keys persist in the `relay-keys` volume (mounted at
   `/data`, non-root `node` user, root FS is read-only).
 - Healthcheck: `GET /` returns 200 while running.
 - The container owns `3000`; stop a locally-running relay first.
+
+On Railway, deploy the `relay-server/` directory (Dockerfile) and attach a
+volume at `/data` so registrations survive redeploys.
 
 ### 2. Laptop agent
 

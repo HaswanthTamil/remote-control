@@ -8,10 +8,11 @@ services:
       - "3000:3000"
     volumes:
       - relay-keys:/data
-    # Credentials (PAIR_TOKEN, PORT, heartbeat tuning) come from the baked
-    # relay-server/.env inside the image. Override at runtime with:
+    # PAIR_TOKEN (+ optional heartbeat tuning) comes from relay-server/.env
+    # (dev copy). Production: set PAIR_TOKEN as an env var instead, e.g.
     #   docker compose run --rm -e PAIR_TOKEN=... relay
-    #   docker run --rm -e PAIR_TOKEN=... remote-control-relay:latest
+    env_file:
+      - ./relay-server/.env
     read_only: true
     tmpfs:
       - /tmp

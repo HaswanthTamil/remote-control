@@ -1,8 +1,9 @@
 node_modules
 devices.json
+.env
+.env.example
 .git
 .gitignore
-.env.example
 Dockerfile
 .dockerignore
 *.log
