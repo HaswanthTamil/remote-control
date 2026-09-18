@@ -1,0 +1,9 @@
+# Laptop agent runtime dependencies (Fedora system python3).
+# System packages (gobject/GLib + GStreamer, PipeWire) are provided by RPMs:
+#   python3-gobject gstreamer1-plugins-{base,good} gstreamer1-plugin-{pipewire,libav}
+#   pipewire pipewire-utils xdg-desktop-portal xdg-desktop-portal-hyprland hyprland
+#
+# Install with: pip install -r requirements.txt
+
+websocket-client>=1.8
+pywayland>=0.4.18

@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#0b0d10">
+  <title>Remote Desktop</title>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <main class="remote-page">
+    <header class="topbar remote-topbar">
+      <a class="back" href="index.html" aria-label="Back">←</a>
+      <div class="connection" id="connStatus">
+        <span class="status-dot" id="connDot"></span>
+        <span id="connText">Connect</span>
+      </div>
+      <button class="capture-toggle" id="captureToggle" title="Start/stop capture">▶</button>
+    </header>
+
+    <section class="screen-stage" id="screenStage" aria-label="Laptop screen">
+      <canvas id="screenCanvas"></canvas>
+      <div class="screen-hint" id="screenHint">Start capture to see the laptop screen</div>
+      <div class="screen-badge" id="screenBadge" hidden>—×—</div>
+    </section>
+
+    <section class="control-bar" aria-label="Pointer controls">
+      <div class="btn-row">
+        <button class="key-chip" data-click="left" title="Left click">Left</button>
+        <button class="key-chip" data-click="right" title="Right click">Right</button>
+        <button class="key-chip" data-click="middle" title="Middle click">Mid</button>
+        <button class="key-chip" data-toggle="keyboard" id="keyboardToggle" title="Keyboard">⌨</button>
+      </div>
+      <div class="touchpad-hint" id="touchpadHint">
+        Move · tap = click · hold &amp; drag = drag · two-finger swipe = scroll
+      </div>
+    </section>
+
+    <section class="keyboard" id="keyboardPanel" aria-label="Keyboard" hidden>
+      <div class="key-row">
+        <button class="key" data-key="ESC">esc</button>
+        <button class="key" data-key="TAB">tab</button>
+        <button class="key-m mod" data-mod="CTRL">ctrl</button>
+        <button class="key-m mod" data-mod="ALT">alt</button>
+        <button class="key-m mod" data-mod="SHIFT">shift</button>
+        <button class="key-m mod" data-mod="SUPER">super</button>
+        <button class="key wide" data-key="BACKSPACE">⌫</button>
+      </div>
+      <div class="key-row">
+        <button class="key-nav" data-key="UP">↑</button>
+        <button class="key" data-key="ENTER">↵</button>
+        <button class="key" data-key="DELETE">del</button>
+        <button class="key" data-key="HOME">home</button>
+        <button class="key" data-key="END">end</button>
+        <button class="key" data-key="PAGEUP">pgup</button>
+        <button class="key" data-key="PAGEDOWN">pgdn</button>
+      </div>
+      <div class="key-row arrows">
+        <button class="key-nav" data-key="LEFT">←</button>
+        <button class="key-nav" data-key="DOWN">↓</button>
+        <button class="key-nav" data-key="RIGHT">→</button>
+      </div>
+      <form class="type-bar" id="typeForm">
+        <input id="typeInput" type="text" autocomplete="off" autocapitalize="off"
+               spellcheck="false" placeholder="Type on the laptop…" aria-label="Type">
+        <button type="submit">Type</button>
+      </form>
+    </section>
+  </main>
+
+  <script type="module" src="js/remote.js"></script>
+</body>
+</html>

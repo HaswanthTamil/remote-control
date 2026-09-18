@@ -214,7 +214,11 @@ function send(ws, message) {
     return false;
   }
 
-  ws.send(JSON.stringify(message));
+  if (Buffer.isBuffer(message)) {
+    ws.send(message); // raw binary passthrough (screen frames)
+  } else {
+    ws.send(JSON.stringify(message));
+  }
   return true;
 }
 
@@ -346,10 +350,29 @@ function handleAuth(ws, message) {
   send(ws, { type: "registered", device: auth.device });
 }
 
-function handleRouting(ws, message) {
+function handleRouting(ws, message, isBinary) {
+  /*
+   * LAPTOP → PHONE (screen fast-lane)
+   * Raw binary frames: a JPEG screenshot from the laptop to the phone. The
+   * buffer is forwarded untouched; the phone decodes it as a binary message.
+   */
+  if (isBinary) {
+    if (ws.device !== "laptop") {
+      return;
+    }
+    send(clients.phone, message);
+    return;
+  }
+
   /*
    * PHONE → LAPTOP
    * { "type": "command", "id": "...", "command": "ls -la" }
+   * { "type": "signal", "signal": "SIGINT" }
+   * { "type": "screen.request", "action": "start"|"stop" }
+   * { "type": "pointer.move", "x": 0.5, "y": 0.5 }
+   * { "type": "pointer.button", "button": "left"|"right"|"middle", "down": true }
+   * { "type": "pointer.scroll", "dx": 0, "dy": 3 }
+   * { "type": "keyboard.key", "key": "KEY_A", "down": true }
    */
   if (message.type === "command") {
     if (ws.device !== "phone") {
@@ -376,16 +399,33 @@ function handleRouting(ws, message) {
     return;
   }
 
+  const phoneToLaptop = [
+    "signal",
+    "screen.request",
+    "pointer.move",
+    "pointer.button",
+    "pointer.scroll",
+    "keyboard.key",
+  ];
+  if (phoneToLaptop.includes(message.type)) {
+    if (ws.device !== "phone") {
+      return;
+    }
+    send(clients.laptop, message);
+    return;
+  }
+
   /*
    * LAPTOP → PHONE
-   * { "type": "output"|"stderr"|"exit"|"error"|"ack", ... }
+   * { "type": "output"|"stderr"|"exit"|"error"|"ack"|"screen.status", ... }
    */
   if (
     message.type === "output" ||
     message.type === "stderr" ||
     message.type === "exit" ||
     message.type === "error" ||
-    message.type === "ack"
+    message.type === "ack" ||
+    message.type === "screen.status"
   ) {
     if (ws.device !== "laptop") {
       return;
@@ -415,7 +455,14 @@ wss.on("connection", (ws) => {
     ws.isAlive = true;
   });
 
-  ws.on("message", (raw) => {
+  ws.on("message", (raw, isBinary) => {
+    if (Buffer.isBuffer(raw) && isBinary) {
+      if (ws.phase !== "ready") {
+        return reject(ws, "Unauthenticated binary message");
+      }
+      return handleRouting(ws, raw, true);
+    }
+
     let message;
 
     try {
@@ -445,7 +492,7 @@ wss.on("connection", (ws) => {
         return failAuth(ws, "Expected an auth message");
 
       case "ready":
-        return handleRouting(ws, message);
+        return handleRouting(ws, message, false);
 
       default:
         return failAuth(ws, "Invalid connection state");
