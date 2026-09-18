@@ -1,5 +1,6 @@
 import json
 import os
+import queue
 import pty
 import select
 import threading
@@ -50,6 +51,18 @@ _screen = None
 _screen_lock = threading.Lock()
 _frame_thread = None
 _screen_last = None
+
+# Serialized input events from the phone (FIFO ordering for move/click pairs).
+_input_q = queue.Queue()
+
+
+def _input_worker():
+    while True:
+        fn = _input_q.get()
+        try:
+            fn()
+        except Exception as exc:
+            dashboard.log(f"[input worker] {exc}")
 
 # Sentinel prefix (unique per agent run)
 _SENTINEL = f"__CMD_DONE__{uuid.uuid4().hex}__"
@@ -169,6 +182,12 @@ def _frame_sender_loop():
 
 
 def _handle_pointer(message):
+    # Serialize through the input queue so move -> button -> release pairs from
+    # the phone always land in order on the Wayland session.
+    _input_q.put(lambda: _do_pointer(message))
+
+
+def _do_pointer(message):
     try:
         inp = get_input()
         mtype = message.get('type')
@@ -176,20 +195,31 @@ def _handle_pointer(message):
             x = float(message.get('x', 0.5))
             y = float(message.get('y', 0.5))
             inp.pointer_move(x, y)
+            dashboard.log(f"[input] pointer.move x={x:.3f} y={y:.3f}")
         elif mtype == 'pointer.button':
             down = message.get('down', True)
             if isinstance(down, str):
                 down = down.lower() in ('down', 'true', 'press', 'pressed')
-            inp.pointer_button(message.get('button', 'left'), bool(down))
+            button = message.get('button', 'left')
+            inp.pointer_button(button, bool(down))
+            dashboard.log(
+                f"[input] pointer.button {button} "
+                f"{'down' if bool(down) else 'up'}"
+            )
         elif mtype == 'pointer.scroll':
             dx = float(message.get('dx', 0))
             dy = float(message.get('dy', 0))
             inp.pointer_scroll(dx, dy)
+            dashboard.log(f"[input] pointer.scroll dx={dx:.2f} dy={dy:.2f}")
     except Exception as exc:
         dashboard.log(f"[pointer error] {exc}")
 
 
 def _handle_keyboard(message):
+    _input_q.put(lambda: _do_keyboard(message))
+
+
+def _do_keyboard(message):
     try:
         inp = get_input()
         key = message.get('key')
@@ -198,6 +228,10 @@ def _handle_keyboard(message):
             down = down.lower() in ('down', 'true', 'press', 'pressed')
         if key:
             inp.key(str(key), bool(down))
+            dashboard.log(
+                f"[input] keyboard.key {str(key)} "
+                f"{'down' if bool(down) else 'up'}"
+            )
     except Exception as exc:
         dashboard.log(f"[keyboard error] {exc}")
 
@@ -572,6 +606,8 @@ def main():
 
     # spawn PTY once and keep it across reconnects
     spawn_persistent_shell()
+
+    threading.Thread(target=_input_worker, name="input-worker", daemon=True).start()
 
     # start reader thread
     _reader_thread = threading.Thread(target=_reader_loop, daemon=True)

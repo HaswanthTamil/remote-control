@@ -10,8 +10,8 @@
 //   hold & drag       -> left-drag (down on hold, up on release)
 //   two-finger swipe  -> pointer.scroll (vertical delta)
 //
-// The keyboard panel sends zwp virtual-keyboard events: KEY_* names, explicit
-// down/up pairs, and independent modifier toggles (CTRL/ALT/SHIFT/SUPER).
+// Keys are entered as plain text or as combos: "CTRL+ALT+T", "SUPER+ENTER",
+// "ESC". Combos hold modifiers, tap the final key, and release everything.
 
 import { PAIR_TOKEN, SERVER_URL } from "../config.js";
 import {
@@ -57,7 +57,8 @@ const badge = document.getElementById("screenBadge");
 const toggle = document.getElementById("captureToggle");
 const connDot = document.getElementById("connDot");
 const connText = document.getElementById("connText");
-const keyboardPanel = document.getElementById("keyboardPanel");
+const comboForm = document.getElementById("comboForm");
+const comboInput = document.getElementById("comboInput");
 
 let imgBox = { x: 0, y: 0, w: 0, h: 0 };
 let lastBitmap = null;
@@ -214,7 +215,6 @@ function handleScreenStatus(message) {
     toggle.title = "Stop capture";
     if (message.width && message.height && message.message) {
       badge.hidden = false;
-      badge.textContent = `${message.width}×${message.height}`;
     }
   } else {
     capturing = false;
@@ -453,19 +453,8 @@ const cancelAll = (e) => {
 stage.addEventListener("touchcancel", cancelAll);
 
 /* ------------------------------------------------------------------ */
-/*  Click chips + keyboard                                             */
+/*  Mouse button chips                                                 */
 /* ------------------------------------------------------------------ */
-
-function tapKey(keyName) {
-  send({ type: "keyboard.key", key: keyName, down: true });
-  setTimeout(() => send({ type: "keyboard.key", key: keyName, down: false }), 40);
-}
-
-function toggleModifier(button) {
-  const mod = button.dataset.mod;
-  const isHeld = button.classList.toggle("active");
-  send({ type: "keyboard.key", key: mod, down: isHeld });
-}
 
 document.querySelectorAll("[data-click]").forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -475,41 +464,64 @@ document.querySelectorAll("[data-click]").forEach((btn) => {
   });
 });
 
-document.querySelectorAll("[data-key]").forEach((btn) => {
-  btn.addEventListener("touchstart", (e) => {
-    e.preventDefault();
-    const key = btn.dataset.key;
-    if (key === "BACKSPACE") {
-      tapKey("BACKSPACE");
-    } else {
-      send({ type: "keyboard.key", key, down: true });
+/* ------------------------------------------------------------------ */
+/*  Text / key-combo input                                             */
+/* ------------------------------------------------------------------ */
+
+// evdev key names (same table as evdev_keycodes.py on the agent).
+const MOD_ALIASES = {
+  CTRL: "LEFTCTRL",
+  CONTROL: "LEFTCTRL",
+  ALT: "LEFTALT",
+  SHIFT: "LEFTSHIFT",
+  SUPER: "LEFTMETA",
+  META: "LEFTMETA",
+  WIN: "LEFTMETA",
+};
+
+const KEY_NAMES = new Set([
+  "ESC", "TAB", "BACKSPACE", "ENTER", "SPACE", "CAPSLOCK",
+  "HOME", "END", "PAGEUP", "PAGEDOWN", "DELETE", "INSERT",
+  "UP", "DOWN", "LEFT", "RIGHT",
+  "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
+  "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
+  "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+  "1", "2", "3", "4", "5", "6", "7", "8", "9", "0",
+  "MINUS", "EQUAL", "LEFTBRACE", "RIGHTBRACE", "BACKSLASH",
+  "SEMICOLON", "APOSTROPHE", "GRAVE", "COMMA", "DOT", "SLASH",
+]);
+
+function keyName(token) {
+  const up = token.trim().toUpperCase();
+  if (MOD_ALIASES[up]) return MOD_ALIASES[up];
+  if (up.startsWith("KEY_")) return up.slice(4);
+  return up;
+}
+
+function sendTap(key) {
+  send({ type: "keyboard.key", key, down: true });
+  setTimeout(() => send({ type: "keyboard.key", key, down: false }), 40);
+}
+
+function sendCombo(combo) {
+  const tokens = combo.split("+").map((t) => t.trim()).filter(Boolean);
+  if (!tokens.length) return;
+  const finalKey = keyName(tokens[tokens.length - 1]);
+  const mods = tokens.slice(0, -1).map(keyName);
+
+  for (const mod of mods) {
+    send({ type: "keyboard.key", key: mod, down: true });
+  }
+  setTimeout(() => {
+    send({ type: "keyboard.key", key: finalKey, down: true });
+    setTimeout(() => send({ type: "keyboard.key", key: finalKey, down: false }), 40);
+  }, 30);
+  setTimeout(() => {
+    for (const mod of mods) {
+      send({ type: "keyboard.key", key: mod, down: false });
     }
-  });
-  btn.addEventListener("touchend", (e) => {
-    e.preventDefault();
-    if (btn.dataset.key === "BACKSPACE") return;
-    send({ type: "keyboard.key", key: btn.dataset.key, down: false });
-  });
-});
-
-document.querySelectorAll(".mod").forEach((btn) => {
-  btn.addEventListener("click", () => toggleModifier(btn));
-});
-
-const typeForm = document.getElementById("typeForm");
-const typeInput = document.getElementById("typeInput");
-
-typeForm.addEventListener("submit", (e) => {
-  e.preventDefault();
-  const text = typeInput.value;
-  typeInput.value = "";
-  if (!text) return;
-  typeString(text);
-});
-
-/* ------------------------------------------------------------------ */
-/*  Character -> evdev KEY name with SHIFT resolution                  */
-/* ------------------------------------------------------------------ */
+  }, 110);
+}
 
 const SHIFTED = {
   "~": "GRAVE", "!": "1", "@": "2", "#": "3", "$": "4", "%": "5",
@@ -563,6 +575,24 @@ function typeString(text) {
   }, delay);
 }
 
+comboForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const raw = comboInput.value;
+  comboInput.value = "";
+  if (!raw.trim()) return;
+
+  if (raw.includes("+")) {
+    sendCombo(raw);
+    return;
+  }
+  const single = keyName(raw);
+  if (KEY_NAMES.has(single)) {
+    sendTap(single);
+    return;
+  }
+  typeString(raw);
+});
+
 /* ------------------------------------------------------------------ */
 /*  Boot                                                               */
 /* ------------------------------------------------------------------ */
@@ -574,10 +604,6 @@ toggle.addEventListener("click", () => {
   } else {
     startCapture();
   }
-});
-
-document.getElementById("keyboardToggle").addEventListener("click", () => {
-  keyboardPanel.hidden = !keyboardPanel.hidden;
 });
 
 window.addEventListener("resize", () => {
