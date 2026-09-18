@@ -19,7 +19,7 @@ import threading
 import time
 
 from pywayland.client import Display
-from pywayland.protocol.wayland import WlSeat
+from pywayland.protocol.wayland import WlKeyboard, WlSeat
 
 from wayland_protocols.virtual_keyboard_unstable_v1 import (
     ZwpVirtualKeyboardManagerV1,
@@ -54,6 +54,20 @@ BUTTON_CODES = {
 # zwp_virtual_keyboard_v1.key_state
 KEY_STATE_RELEASED = 0
 KEY_STATE_PRESSED = 1
+
+# zwp_virtual_keyboard_v1.keymap_format
+XKB_KEYMAP_FORMAT_NO_V1 = 1
+
+# XKB modifier bit masks for the modifiers() request. Indices follow the
+# standard xkb common_iso6442 modmap used by every mainstream layout:
+#   Shift=0  Lock=1  Control=2  Mod1=3  Mod2=4  Mod3=5  Mod4=6  Mod5=7
+# Super is Mod4 (bit 6), Alt is Mod1 (bit 3).
+_XKB_MOD_BITS = {
+    "SHIFT": 1 << 0, "LEFTSHIFT": 1 << 0, "RIGHTSHIFT": 1 << 0,
+    "CTRL": 1 << 2, "LEFTCTRL": 1 << 2, "RIGHTCTRL": 1 << 2,
+    "ALT": 1 << 3, "LEFTALT": 1 << 3, "RIGHTALT": 1 << 3,
+    "SUPER": 1 << 6, "LEFTMETA": 1 << 6, "RIGHTMETA": 1 << 6,
+}
 
 
 def _monotonic_ms() -> int:
@@ -97,6 +111,9 @@ class WaylandInput:
         self.geometry: dict | None = None
         self._lock = threading.Lock()
         self._connected = False
+        self._keymap_bytes = b""
+        self._keymap_sent = False
+        self._held_mods = 0
 
     # -- connection ------------------------------------------------------
 
@@ -133,9 +150,69 @@ class WaylandInput:
         if getattr(self, "_vk_mgr", None) is None:
             raise RuntimeError("zwp_virtual_keyboard_manager_v1 not advertised")
 
+        self._bind_seat_keyboard()
         self.geometry = query_monitor_geometry()
         self._connected = True
         return True
+
+    def _bind_seat_keyboard(self):
+        """Bind wl_keyboard so we receive the compositor's real keymap.
+
+        zwp_virtual_keyboard_v1 requires a keymap to be set before any key
+        event; without it the compositor cannot resolve keycodes, so Hyprland
+        keybinds and typed text go nowhere. We capture the live keymap from
+        the seat and mirror it into the virtual keyboard.
+        """
+        try:
+            kbd = getattr(self, "_seat", None).get_keyboard()
+        except Exception:
+            return
+
+        def on_keymap(keyboard, format, fd, size):
+            if format != 1:  # wl_keyboard.keymap_format: xkb_v1 = 1
+                return
+            try:
+                # pywayland hands the fd over at EOF; rewind before reading.
+                os.lseek(fd, 0, os.SEEK_SET)
+                data = bytearray()
+                while len(data) < size:
+                    chunk = os.read(fd, size - len(data))
+                    if not chunk:
+                        break
+                    data += chunk
+            except OSError:
+                return
+            self._keymap_bytes = bytes(data)
+
+        kbd.dispatcher["keymap"] = on_keymap
+        self._kb_proxy = kbd
+        # Roundtrip so the keymap event is received and processed.
+        try:
+            self.display.roundtrip()
+        except Exception:
+            pass
+
+    def _send_keymap(self):
+        """Push the captured keymap into the virtual keyboard (once)."""
+        if self._keymap_sent or not self._keymap_bytes:
+            return self._keymap_bytes != b""
+        try:
+            size = len(self._keymap_bytes)
+            fd = os.memfd_create("rc-virtual-keymap", 0)
+            try:
+                os.write(fd, self._keymap_bytes)
+            except OSError:
+                pass
+            with self._lock:
+                self.keyboard.keymap(XKB_KEYMAP_FORMAT_NO_V1, fd, size)
+            os.close(fd)
+            self._flush()
+            self._keymap_sent = True
+            return True
+        except Exception:
+            # memfd unavailable / not-yet-created keyboard: skip keymap, keep
+            # sending raw key events as before rather than failing hard.
+            return False
 
     def create_inputs(self):
         """Create the virtual pointer and keyboard objects (call after connect)."""
@@ -145,6 +222,7 @@ class WaylandInput:
                 raise RuntimeError("no wl_seat bound (no seat available)")
             self.pointer = self._vp_mgr.create_virtual_pointer(seat)
             self.keyboard = self._vk_mgr.create_virtual_keyboard(seat)
+        self._send_keymap()
         self._flush()
 
     # -- pointer ---------------------------------------------------------
@@ -197,10 +275,18 @@ class WaylandInput:
         code = keycode_for_name(key_name)
         if code is None:
             return
+        if not self._keymap_sent:
+            self._send_keymap()
         with self._lock:
+            mask = _XKB_MOD_BITS.get(key_name.upper().replace("KEY_", ""), 0)
+            if down:
+                self._held_mods |= mask
+            else:
+                self._held_mods &= ~mask
             self.keyboard.key(
                 _monotonic_ms(), code, KEY_STATE_PRESSED if down else KEY_STATE_RELEASED
             )
+            self.keyboard.modifiers(self._held_mods, 0, 0, 0)
         self._flush()
 
     # -- lifecycle helpers -----------------------------------------------
@@ -229,6 +315,7 @@ class WaylandInput:
             for proxy in (
                 getattr(self, "keyboard", None),
                 getattr(self, "pointer", None),
+                getattr(self, "_kb_proxy", None),
                 getattr(self, "_seat", None),
                 getattr(self, "_vp_mgr", None),
                 getattr(self, "_vk_mgr", None),
