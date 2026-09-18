@@ -11,10 +11,13 @@ import errno
 import re
 
 import websocket
+from websocket import ABNF
 
 from config import DASHBOARD_HOST, DASHBOARD_PORT, PAIR_TOKEN, SERVER_URL
 import auth
 import dashboard
+from input_inject import get_input, reset_input
+from screen_capture import ScreenCapture
 
 
 def _normalize_ws_url(url):
@@ -41,6 +44,12 @@ _cmd_lock = threading.Lock()
 _current_command_id = None
 _pending_exits = {}
 _CONN = {"backoff": 1.0}
+
+# Screen capture / remote control state
+_screen = None
+_screen_lock = threading.Lock()
+_frame_thread = None
+_screen_last = None
 
 # Sentinel prefix (unique per agent run)
 _SENTINEL = f"__CMD_DONE__{uuid.uuid4().hex}__"
@@ -87,6 +96,110 @@ def send_ws(message):
         except Exception:
             # ignore send errors (will be retried on reconnect)
             return
+
+
+def send_binary(data: bytes):
+    global _ws
+    with _send_lock:
+        try:
+            if _ws and getattr(_ws, 'sock', None) and getattr(_ws.sock, 'connected', False):
+                # Raw binary frames are the screen fast-lane (laptop -> phone).
+                _ws.send(data, opcode=ABNF.OPCODE_BINARY)
+        except Exception:
+            return
+
+
+def _screen_status(text):
+    global _screen
+    dashboard.log(text)
+    with _screen_lock:
+        cap = _screen
+    if cap is not None:
+        send_ws({
+            'type': 'screen.status',
+            'active': cap.active,
+            'width': cap.source_size[0],
+            'height': cap.source_size[1],
+            'message': text,
+        })
+
+
+def _start_screen():
+    global _screen, _frame_thread
+    with _screen_lock:
+        if _screen is None:
+            _screen = ScreenCapture(on_status=_screen_status)
+        cap = _screen
+    if cap.active:
+        _screen_status("screen: already capturing")
+        return
+    if cap.start():
+        if _frame_thread is None or not _frame_thread.is_alive():
+            _frame_thread = threading.Thread(target=_frame_sender_loop, daemon=True)
+            _frame_thread.start()
+
+
+def _stop_screen():
+    global _screen
+    with _screen_lock:
+        cap = _screen
+    if cap is not None:
+        cap.stop()
+        _screen_status("screen: capture stopped")
+
+
+def _frame_sender_loop():
+    """Poll the newest-frame-wins slot and push raw binary JPEG frames.
+
+    Runs for the life of the process; only sends while a capture is active
+    and the frame actually changed. Control messages (JSON) share the same
+    socket lock but are small and rare, so they interleave freely with the
+    frame fast-lane (PRD: control plane has priority over frames).
+    """
+    global _screen, _screen_last
+    while True:
+        with _screen_lock:
+            cap = _screen
+        if cap is not None and cap.active:
+            frame = cap.latest_frame()
+            if frame is not None and frame is not _screen_last:
+                send_binary(frame)
+                _screen_last = frame
+        time.sleep(0.02)
+
+
+def _handle_pointer(message):
+    try:
+        inp = get_input()
+        mtype = message.get('type')
+        if mtype == 'pointer.move':
+            x = float(message.get('x', 0.5))
+            y = float(message.get('y', 0.5))
+            inp.pointer_move(x, y)
+        elif mtype == 'pointer.button':
+            down = message.get('down', True)
+            if isinstance(down, str):
+                down = down.lower() in ('down', 'true', 'press', 'pressed')
+            inp.pointer_button(message.get('button', 'left'), bool(down))
+        elif mtype == 'pointer.scroll':
+            dx = float(message.get('dx', 0))
+            dy = float(message.get('dy', 0))
+            inp.pointer_scroll(dx, dy)
+    except Exception as exc:
+        dashboard.log(f"[pointer error] {exc}")
+
+
+def _handle_keyboard(message):
+    try:
+        inp = get_input()
+        key = message.get('key')
+        down = message.get('down', message.get('state'))
+        if isinstance(down, str):
+            down = down.lower() in ('down', 'true', 'press', 'pressed')
+        if key:
+            inp.key(str(key), bool(down))
+    except Exception as exc:
+        dashboard.log(f"[keyboard error] {exc}")
 
 
 def _reader_loop():
@@ -349,6 +462,22 @@ def on_message(ws, raw_message):
         threading.Thread(target=_handle_signal, args=(message,), daemon=True).start()
         return
 
+    if message_type == 'screen.request':
+        action = message.get('action')
+        if action == 'start':
+            threading.Thread(target=_start_screen, daemon=True).start()
+        elif action == 'stop':
+            threading.Thread(target=_stop_screen, daemon=True).start()
+        return
+
+    if message_type in ('pointer.move', 'pointer.button', 'pointer.scroll'):
+        threading.Thread(target=_handle_pointer, args=(message,), daemon=True).start()
+        return
+
+    if message_type == 'keyboard.key':
+        threading.Thread(target=_handle_keyboard, args=(message,), daemon=True).start()
+        return
+
     if message_type == 'error':
         text = message.get('message') or ''
         dashboard.log(f"[server error] {text}")
@@ -379,9 +508,17 @@ def on_error(ws, error):
 
 
 def on_close(ws, close_status_code, close_message):
-    global _ws
+    global _ws, _screen_last
     with _ws_lock:
         _ws = None
+
+    # No phone is attached anymore; tear down the screen stream so the portal
+    # and PipeWire nodes are released. Input stays inert until reconnected.
+    _screen_last = None
+    with _screen_lock:
+        cap = _screen
+    if cap is not None:
+        cap.stop()
 
     dashboard.set_status(connected=False, registered=False, reconnecting=True)
     dashboard.log(f"[disconnected] code={close_status_code} message={close_message}")
