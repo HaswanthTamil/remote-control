@@ -350,7 +350,24 @@ def on_message(ws, raw_message):
         return
 
     if message_type == 'error':
-        dashboard.log(f"[server error] {message.get('message')}")
+        text = message.get('message') or ''
+        dashboard.log(f"[server error] {text}")
+
+        # Self-healing pairing: if the relay says this device isn't paired but
+        # we *believe* it is (marker from an older/empty keystore, a redeploy,
+        # or a fresh database), drop the marker and reconnect so the next
+        # register includes PAIR_TOKEN again. Guards against an endless loop:
+        # we only re-register-with-token once per marker.
+        if (
+            'not paired' in text.lower()
+            and auth.is_paired(SERVER_URL)
+        ):
+            dashboard.log('[auth] relay does not know this device; clearing pair marker and re-pairing')
+            auth.clear_paired_for(SERVER_URL)
+            try:
+                ws.close()
+            except Exception:
+                pass
         return
 
     dashboard.log(f"[unknown message] {message}")

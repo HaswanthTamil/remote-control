@@ -71,9 +71,13 @@ On Railway, deploy the `relay-server/` directory (Dockerfile) and attach a
 volume at `/data` so registrations survive redeploys.
 
 **Vercel:** the server's filesystem is read-only, so the JSON keystore cannot
-be written. Set `KEYSTORE=sqlite` plus `TURSO_URL` and `TURSO_AUTH_TOKEN`
-(pointing at a free Turso database) in the project's env vars; device
-registrations then persist in the database instead of `devices.json`.
+be written. Setting `TURSO_URL` + `TURSO_AUTH_TOKEN` (a free Turso database)
+automatically switches the keystore to SQLite; `relay-server/schema.sql` is
+applied at startup (or run `turso db shell <db> < schema.sql` manually).
+Device registrations then persist in the database. If the relay ever reports
+"Device not paired" for a device that was previously paired (e.g. an empty
+keystore after a redeploy), the laptop agent and phone now detect that
+automatically and re-pair with `PAIR_TOKEN` on the next connection.
 
 ### 2. Laptop agent
 

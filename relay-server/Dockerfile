@@ -15,6 +15,7 @@ ENV KEYS_FILE=/data/devices.json
 # The local relay-server/.env file is for development only and is excluded
 # from the image so the secret is never published.
 COPY index.js ./
+COPY schema.sql ./
 COPY --from=deps /app/node_modules ./node_modules
 
 # Persistent device keystore (registered public keys survive restarts).
