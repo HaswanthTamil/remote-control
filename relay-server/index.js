@@ -14,7 +14,9 @@ const PAIR_TOKEN = process.env.PAIR_TOKEN;
 const HEARTBEAT_INTERVAL = parseInt(process.env.HEARTBEAT_INTERVAL || "20000", 10);
 const AUTH_TIMEOUT = parseInt(process.env.AUTH_TIMEOUT_MS || "10000", 10);
 const KEYS_FILE = process.env.KEYS_FILE || path.join(__dirname, "devices.json");
-const KEYSTORE = process.env.KEYSTORE || "file"; // "file" | "sqlite"
+// SQLite is auto-selected when a Turso URL is present, so a Vercel deploy only
+// needs TURSO_URL + TURSO_AUTH_TOKEN (no separate KEYSTORE flag required).
+const KEYSTORE = process.env.KEYSTORE || (process.env.TURSO_URL ? "sqlite" : "file"); // "file" | "sqlite"
 const TURSO_URL = process.env.TURSO_URL; // https://<db>-<org>.turso.io or file:/path/to.db
 const TURSO_AUTH_TOKEN = process.env.TURSO_AUTH_TOKEN;
 
@@ -114,11 +116,20 @@ async function createKeystore() {
       );
     }
     const store = createSqliteKeystore();
-    await store.raw("CREATE TABLE IF NOT EXISTS devices (" +
+    // Idempotent bootstrap/migration (also shipped as schema.sql so it can be
+    // applied manually with `turso db shell`). CREATE TABLE IF NOT EXISTS is
+    // safe to re-run on every boot.
+    let schema = "CREATE TABLE IF NOT EXISTS devices (" +
       "device_id TEXT PRIMARY KEY, " +
       "public_key TEXT NOT NULL, " +
       "device TEXT NOT NULL, " +
-      "paired_at TEXT NOT NULL)");
+      "paired_at TEXT NOT NULL)";
+    try {
+      schema = fs.readFileSync(path.join(__dirname, "schema.sql"), "utf8");
+    } catch {
+      // schema.sql missing -> use the inline default above
+    }
+    await store.raw(schema);
     return store;
   }
   return createFileKeystore();
@@ -128,6 +139,7 @@ const keystore = await createKeystore().catch((err) => {
   console.error(err.message);
   process.exit(1);
 });
+console.log(`Keystore backend: ${KEYSTORE}`);
 
 /* ------------------------------------------------------------------ */
 /*  Crypto helpers (Ed25519 public-key auth)                           */

@@ -1,5 +1,6 @@
 import { PAIR_TOKEN, SERVER_URL } from "../config.js";
 import {
+  clearPaired,
   deviceId,
   isPaired,
   loadKeyPair,
@@ -134,6 +135,17 @@ function connect() {
 
       case "error":
         addLine(`✗ ${message.message}`);
+        // Self-healing: if the relay doesn't recognize a device we thought was
+        // paired (empty/new keystore after a redeploy), forget the pairing so
+        // the next reconnect retries with PAIR_TOKEN.
+        if (
+          typeof message.message === "string" &&
+          message.message.toLowerCase().includes("not paired") &&
+          isPaired(relayHost)
+        ) {
+          addLine("✗ Pairing state stale; clearing marker and re-pairing", true);
+          clearPaired(relayHost);
+        }
         break;
 
       case "ack":

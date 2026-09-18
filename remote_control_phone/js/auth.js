@@ -113,3 +113,7 @@ export function isPaired(relayHost) {
 export function markPaired(relayHost, deviceIdValue) {
   localStorage.setItem(PAIRED_STORAGE + ":" + relayHost, deviceIdValue || "1");
 }
+
+export function clearPaired(relayHost) {
+  localStorage.removeItem(PAIRED_STORAGE + ":" + relayHost);
+}

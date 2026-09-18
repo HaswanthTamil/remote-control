@@ -105,3 +105,9 @@ def clear_paired():
     for name in os.listdir(_KEYS_DIR):
         if name.startswith("paired_"):
             os.remove(os.path.join(_KEYS_DIR, name))
+
+
+def clear_paired_for(server_url):
+    marker = _marker_path(server_url)
+    if os.path.exists(marker):
+        os.remove(marker)
