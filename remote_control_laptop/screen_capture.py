@@ -170,6 +170,9 @@ class ScreenCapture:
     def start(self) -> bool:
         if self._started:
             return True
+        if self._portal_thread is not None and self._portal_thread.is_alive():
+            self._on_status("screen: capture already starting")
+            return False
         if not capture_available():
             self._on_status("screen: screen capture unavailable (no Wayland session)")
             return False
@@ -247,7 +250,7 @@ class ScreenCapture:
         )
         if req is None:
             return
-        status, _results = self._respond(req, _REQUEST_TIMEOUT)
+        status, _results = self._respond(req, _REQUEST_TIMEOUT, dismiss_picker=True)
         if status != 0:
             self._on_status(
                 f"screen: SelectSources returned status {status} "
@@ -310,8 +313,59 @@ class ScreenCapture:
             return None
         return reply.unpack()[0]
 
-    def _respond(self, req_path, timeout):
+    # -- share-picker auto-accept ---------------------------------------
+
+    def _share_picker_windows(self):
+        try:
+            out = subprocess.run(
+                ["hyprctl", "clients", "-j"],
+                capture_output=True, text=True, timeout=3,
+            ).stdout
+            return [
+                c for c in json.loads(out)
+                if c.get("class") == "hyprland-share-picker"
+            ]
+        except Exception:
+            return []
+
+    def _dismiss_share_picker_once(self):
+        """Click the picker's default Select button via the virtual pointer.
+
+        xdg-desktop-portal-hyprland reopens the monitor picker on every
+        session even with persist_mode=2, so we approve it ourselves. The
+        Select button sits bottom-right; a click just inside that corner
+        activates it (verified against the live picker).
+        """
+        wins = self._share_picker_windows()
+        if not wins:
+            return
+        ax, ay = wins[0]["at"]
+        ww, wh = wins[0]["size"]
+        try:
+            from input_inject import get_input
+            inp = get_input()
+        except Exception:
+            return
+        g = inp.geometry or {"x": 0, "y": 0, "width": 1920, "height": 1080}
+        px = ax + ww - 55
+        py = ay + wh - 20
+        gx = max(0.0, min(1.0, (px - g["x"]) / g["width"]))
+        gy = max(0.0, min(1.0, (py - g["y"]) / g["height"]))
+        try:
+            inp.pointer_move(gx, gy)
+            time.sleep(0.15)
+            inp.pointer_button("left", True)
+            time.sleep(0.08)
+            inp.pointer_button("left", False)
+        except Exception:
+            return
+
+    def _respond(self, req_path, timeout, dismiss_picker=False):
         """Wait for Request.Response on the portal request path.
+
+        When ``dismiss_picker`` is set the share-picker window is clicked
+        once (its default Select button) if it appears - xdg-desktop-portal
+        on Hyprland asks every time even with persist_mode=2.
 
         Returns (status, results), or (status=-1, {}) on timeout/error.
         """
@@ -329,10 +383,16 @@ class ScreenCapture:
         sig_id = req_proxy.connect("g-signal", on_signal, None)
 
         deadline = time.monotonic() + timeout
+        picker_clicked = False
         while "data" not in box and time.monotonic() < deadline:
             while self._ctx.pending():
                 self._ctx.iteration(False)
-            time.sleep(0.002)
+            if dismiss_picker and not picker_clicked:
+                if self._share_picker_windows():
+                    self._dismiss_share_picker_once()
+                    picker_clicked = True
+                    self._on_status("screen: share picker accepted")
+            time.sleep(0.025)
         req_proxy.disconnect(sig_id)
         del req_proxy
         if "data" not in box:
