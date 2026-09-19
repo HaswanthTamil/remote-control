@@ -28,5 +28,51 @@
       </a>
     </section>
   </main>
+
+  <div class="lock-screen" id="lockScreen">
+    <div class="lock-card">
+      <span class="lock-mark" aria-hidden="true">&#128274;</span>
+      <h1>Locked</h1>
+      <p>Enter the passcode to open Remote Control</p>
+      <form id="lockForm">
+        <input id="lockPin" type="password" autocomplete="off" maxlength="10"
+               placeholder="Passcode" aria-label="Passcode">
+        <button type="submit">Unlock</button>
+      </form>
+      <div class="lock-error" id="lockError"></div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      var PASSCODE = "laser";
+      var lock = document.getElementById("lockScreen");
+      var form = document.getElementById("lockForm");
+      var pin = document.getElementById("lockPin");
+      var err = document.getElementById("lockError");
+
+      function unlock() {
+        try { sessionStorage.setItem("rc_unlocked", "1"); } catch (e) {}
+        lock.classList.add("hidden");
+        pin.value = "";
+        err.textContent = "";
+      }
+
+      if (sessionStorage.getItem("rc_unlocked") === "1") {
+        lock.classList.add("hidden");
+      }
+
+      form.addEventListener("submit", function (e) {
+        e.preventDefault();
+        if (pin.value === PASSCODE) {
+          unlock();
+        } else {
+          err.textContent = "Wrong passcode";
+          pin.value = "";
+          pin.focus();
+        }
+      });
+    })();
+  </script>
 </body>
 </html>

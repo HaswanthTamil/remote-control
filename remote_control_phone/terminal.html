@@ -6,6 +6,12 @@
   <meta name="theme-color" content="#0b0d10">
   <title>Terminal</title>
   <link rel="stylesheet" href="css/app.css">
+  <script>
+    // Passcode gate: keep this tab locked until index.html unlocks it.
+    if (sessionStorage.getItem("rc_unlocked") !== "1") {
+      location.replace("index.html");
+    }
+  </script>
 </head>
 <body>
   <main class="terminal-page">

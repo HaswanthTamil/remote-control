@@ -387,3 +387,89 @@ a {
   font-weight: 750;
   font-size: 13px;
 }
+
+.lock-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: #0b0d10;
+}
+
+.lock-screen.hidden {
+  display: none;
+}
+
+.lock-card {
+  width: min(100%, 320px);
+  border: 1px solid #252b33;
+  border-radius: 16px;
+  background: #101419;
+  padding: 24px 20px;
+  text-align: center;
+}
+
+.lock-card .lock-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: #3a8dde;
+  color: #0b0d10;
+  font-size: 20px;
+  margin-bottom: 14px;
+}
+
+.lock-card h1 {
+  margin: 0 0 4px;
+  font-size: 17px;
+  font-weight: 650;
+}
+
+.lock-card p {
+  margin: 0 0 16px;
+  color: #8f9aa6;
+  font-size: 13px;
+}
+
+.lock-card form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lock-card input {
+  border: 1px solid #2b323b;
+  border-radius: 9px;
+  padding: 12px;
+  background: #0c0f13;
+  color: #f3f5f7;
+  font-size: 15px;
+  letter-spacing: 0.2em;
+  text-align: center;
+}
+
+.lock-card input::placeholder {
+  color: #59616b;
+  letter-spacing: normal;
+}
+
+.lock-card button {
+  border: 0;
+  border-radius: 9px;
+  padding: 12px;
+  background: #e7eaee;
+  color: #0b0d10;
+  font-weight: 750;
+  font-size: 14px;
+}
+
+.lock-error {
+  min-height: 16px;
+  margin-top: 10px;
+  color: #f87171;
+  font-size: 12px;
+}

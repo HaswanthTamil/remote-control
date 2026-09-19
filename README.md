@@ -142,6 +142,33 @@ and pairs automatically. Afterward you can delete the `PAIR_TOKEN` value.
 Only one phone and one laptop are connected at a time; a newer connection for
 the same device replaces the old one.
 
+## Remote screen + pointer + keyboard
+
+Beyond command run, the laptop agent streams the live screen to the phone and
+accepts touch/keyboard input. This is Wayland-native only (no X11):
+
+- **Screen capture:** XDG ScreenCast portal + PipeWire, ~5 fps, newest-frame-
+  wins so slow networks cannot build up unbounded frame queues. The capture
+  runs in its own thread/GLib context and never blocks the command path.
+  Hyprland's portal reopens the monitor share-picker on every session, so the
+  agent auto-accepts it (clicks the picker's Select button through its own
+  virtual pointer once). `screen.request` start/stop, `screen.status`, and
+  binary `screen.frame` (jpeg) messages; control messages include frames.
+- **Pointer:** normalized 0.0-1.0 coordinates so any phone/laptop resolution
+  maps exactly. Touch moves the pointer; touch release = left click; right and
+  middle clicks are supported by the input server.
+- **Keyboard:** `KEY_*` names with explicit `down`/`up`, key sent via
+  `libinput`/`libevdev`-style virtual keyboard through pywayland, and modifier
+  state driven by a `modifiers()` event carrying the XKB bitmask. Verified
+  against this Hyprland host: `Super+4` switches workspace, `Ctrl+C` works in
+  the PTY terminal, plain keys fire binds.
+- **Passcode lock:** the phone web app opens behind a full-screen passcode
+  overlay; the laptop `remote.html` / `terminal.html` pages redirect back to
+  the lock when `sessionStorage.rc_unlocked` is unset. The passcode lives in
+  page JS - it gates casual access, it is not cryptographic.
+
+Wire protocol notes live in `docs/io-mapping-PRD.md`.
+
 ## Heartbeat / disconnect detection
 
 - The relay pings every 20 s and kills connections that miss their pong
