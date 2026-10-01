@@ -1,4 +1,4 @@
-package com.remotecontrol.data
+package com.remotecontrol.input
 
 /**
  * Key name mapping for `keyboard.key`, the Kotlin twin of the tables in

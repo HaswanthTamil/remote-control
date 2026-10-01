@@ -82,6 +82,12 @@ val MonoTextStyle = TextStyle(
     lineHeight = 20.sp,
 )
 
+val MonoSmallTextStyle = TextStyle(
+    fontFamily = MonoFamily,
+    fontSize = 11.sp,
+    lineHeight = 15.sp,
+)
+
 @Composable
 fun RemoteControlTheme(
     @Suppress("UNUSED_PARAMETER") darkTheme: Boolean = isSystemInDarkTheme(),

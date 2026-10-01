@@ -89,6 +89,8 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.biometric)
+    implementation(libs.androidx.fragment)
     implementation(libs.kotlinx.coroutines.android)
 
     implementation(platform(libs.androidx.compose.bom))
@@ -105,4 +107,5 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.json)
     testImplementation(libs.okhttp)
+    testImplementation(libs.mockwebserver)
 }

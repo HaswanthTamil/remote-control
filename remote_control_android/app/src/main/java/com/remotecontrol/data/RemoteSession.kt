@@ -51,10 +51,17 @@ class RemoteSession(private val app: Application) {
             override fun onState(state: ConnectionState) = onStateChanged(state)
             override fun onMessage(message: Incoming) = onMessageReceived(message)
             override fun onFrame(bytes: ByteArray) {
-                frames.trySend(bytes) // newest-wins: a slow phone must not queue frames
+                framesChannel.trySend(bytes) // newest-wins: a slow phone must not queue frames
             }
         }
     }
+
+    private val framesChannel = Channel<ByteArray>(
+        capacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+
+    val frames: Flow<ByteArray> = framesChannel.receiveAsFlow()
 
     private val _connection = MutableStateFlow(ConnectionState.OFFLINE)
     val connection: StateFlow<ConnectionState> = _connection.asStateFlow()
@@ -67,13 +74,6 @@ class RemoteSession(private val app: Application) {
 
     private val _notices = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val notices: SharedFlow<String> = _notices.asSharedFlow()
-
-    val frames: Flow<ByteArray> = framesChannel.receiveAsFlow()
-
-    private val framesChannel = Channel<ByteArray>(
-        capacity = 1,
-        onBufferOverflow = BufferOverflow.DROP_OLDEST,
-    )
 
     val config: AppConfig get() = settings.current
     val deviceId: String get() = identity.deviceId
@@ -148,7 +148,16 @@ class RemoteSession(private val app: Application) {
         }
     }
 
-    fun clearTerminal() = _lines.value = emptyList()
+    fun clearTerminal() {
+        _lines.value = emptyList()
+    }
+
+    /** Drops the socket when the app leaves the foreground; it reconnects on unlock. */
+    fun onBackgrounded() {
+        if (_connection.value == ConnectionState.READY || _connection.value == ConnectionState.AUTHENTICATING) {
+            client.disconnect()
+        }
+    }
 
     /* ------------------------------------------------------------------ */
     /*  Screen + input                                                    */

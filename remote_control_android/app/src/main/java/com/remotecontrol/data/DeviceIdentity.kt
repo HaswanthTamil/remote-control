@@ -35,12 +35,17 @@ class DeviceIdentity(private val storage: KeyValueStore) {
     @Volatile
     private var keyPair: KeyPair? = null
 
+    /**
+     * Empty until [load] has completed. The handshake always calls [load] first,
+     * but the UI may render before it finishes, so this must never throw.
+     */
     val publicKeyHex: String
-        get() = keyPair?.let { Hex.encode(rawPublicKey(it.public)) }
-            ?: error("DeviceIdentity.load() must be called before reading the public key")
+        get() = keyPair?.let { Hex.encode(rawPublicKey(it.public)) }.orEmpty()
 
     val deviceId: String
-        get() = Hex.encode(sha256(rawPublicKey(keyPair!!.public)))
+        get() = keyPair?.let { Hex.encode(sha256(rawPublicKey(it.public))) }.orEmpty()
+
+    val isLoaded: Boolean get() = keyPair != null
 
     /** Loads the stored keypair, or generates one on first run. */
     @Synchronized
@@ -48,11 +53,14 @@ class DeviceIdentity(private val storage: KeyValueStore) {
         keyPair?.let { return }
         val privB64 = storage.privateKeyBase64
         val pubHex = storage.publicKeyHex
-        if (privB64 && pubHex) {
+        if (privB64 != null && pubHex != null) {
             val restored = runCatching {
                 val der = Base64.getDecoder().decode(privB64)
                 val privateKey: PrivateKey = keyFactory().generatePrivate(PKCS8EncodedKeySpec(der))
-                val publicKey: PublicKey = keyFactory().generatePublic(X509EncodedKeySpec(Hex.decode(pubHex)))
+                // `publicKeyHex` is the raw 32-byte point, so wrap it back into
+                // the X.509 envelope the KeyFactory expects.
+                val publicKey: PublicKey = keyFactory()
+                    .generatePublic(X509EncodedKeySpec(wrapRawEd25519(Hex.decode(pubHex))))
                 KeyPair(publicKey, privateKey)
             }.getOrNull()
             if (restored != null) {
@@ -76,7 +84,7 @@ class DeviceIdentity(private val storage: KeyValueStore) {
     /** Signs `<deviceId>:<nonce>` - the exact payload the relay verifies. */
     fun sign(message: String): String {
         val signer = signature()
-        signer.initSign(keyPair!!.private)
+        signer.initSign(checkNotNull(keyPair) { "load() must run before signing" }.private)
         signer.update(message.toByteArray(Charsets.UTF_8))
         return Hex.encode(signer.sign())
     }
@@ -113,32 +121,54 @@ class DeviceIdentity(private val storage: KeyValueStore) {
         fun sha256(bytes: ByteArray): ByteArray = MessageDigest.getInstance("SHA-256").digest(bytes)
 
         /**
-         * Extracts the raw 32-byte Ed25519 point from an X.509 SubjectPublicKeyInfo
-         * (SEQUENCE { BIT STRING }), so the hex we send matches the browser's
-         * `exportKey("raw")` and Python's `public_bytes_raw`.
+         * Extracts the raw 32-byte Ed25519 point from an X.509
+         * SubjectPublicKeyInfo (`SEQUENCE { AlgorithmIdentifier, BIT STRING }`),
+         * so the hex we send matches the browser's `exportKey("raw")` and
+         * Python's raw public bytes.
          */
         fun rawPublicKey(publicKey: PublicKey): ByteArray {
-            val der = publicKey.encoded
-            val seq = DerReader(der)
-            val sequence = seq.readTagged(0x30) ?: error("malformed SubjectPublicKeyInfo")
-            val bitString = DerReader(sequence).readTagged(0x03) ?: error("malformed public key bit string")
-            if (bitString.isEmpty()) error("empty public key bit string")
-            return bitString.copyOfRange(1, bitString.size) // drop the "unused bits" byte
+            val spki = DerReader(publicKey.encoded).readNext()?.content
+                ?: error("malformed SubjectPublicKeyInfo")
+            val inner = DerReader(spki)
+            var bitString: ByteArray? = null
+            while (true) {
+                val element = inner.readNext() ?: break
+                if (element.tag == BIT_STRING_TAG) {
+                    bitString = element.content
+                    break
+                }
+            }
+            val bits = bitString ?: error("malformed public key bit string")
+            require(bits.isNotEmpty()) { "empty public key bit string" }
+            return bits.copyOfRange(1, bits.size) // drop the "unused bits" byte
         }
+
+                const val BIT_STRING_TAG = 0x03
+
+        /** X.509 SubjectPublicKeyInfo header for an Ed25519 raw public key. */
+        private val SPKI_HEADER = byteArrayOf(
+            0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
+        )
+
+        fun wrapRawEd25519(raw: ByteArray): ByteArray = SPKI_HEADER + raw
     }
 }
 
-/** Minimal DER TLV reader - just enough to unwrap SPKI, avoiding a crypto lib. */
+/** Minimal DER TLV reader - enough to unwrap SPKI without pulling in a crypto lib. */
 private class DerReader(private val bytes: ByteArray) {
+
+    class Element(val tag: Int, val content: ByteArray)
+
     private var index = 0
 
-    fun readTagged(expectedTag: Int): ByteArray? {
+    fun readNext(): Element? {
         if (index + 2 > bytes.size) return null
         val tag = bytes[index++].toInt() and 0xff
-        if (tag != expectedTag) return null
         val length = readLength() ?: return null
-        if (index + length > bytes.size) return null
-        return bytes.copyOfRange(index, index + length).also { index += length }
+        if (length < 0 || index + length > bytes.size) return null
+        val content = bytes.copyOfRange(index, index + length)
+        index += length
+        return Element(tag, content)
     }
 
     private fun readLength(): Int? {

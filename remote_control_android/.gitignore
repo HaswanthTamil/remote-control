@@ -1,0 +1,21 @@
+# Gradle
+.gradle/
+build/
+local.properties
+keystore.properties
+*.keystore
+*.jks
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Keystore material must never be committed
+release.jks

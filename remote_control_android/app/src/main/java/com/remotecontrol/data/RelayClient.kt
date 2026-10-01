@@ -4,6 +4,7 @@ import com.remotecontrol.config.AppConfig
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
+import okio.ByteString
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -94,8 +95,10 @@ class RelayClient(private val identity: DeviceIdentity) {
     fun send(message: JSONObject): Boolean {
         val ws = socket ?: return false
         if (!authenticated) return false
-        return ws.send(message.toString())
+        return send(ws, message)
     }
+
+    private fun send(ws: WebSocket, message: JSONObject): Boolean = ws.send(message.toString())
 
     private fun openSocket(config: AppConfig) {
         synchronized(lock) {
@@ -165,9 +168,9 @@ class RelayClient(private val identity: DeviceIdentity) {
             }
         }
 
-        override fun onMessage(webSocket: WebSocket, bytes: ByteArray) {
+        override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
             // Raw binary = JPEG screen frame from the laptop (fast-lane, untouched).
-            listener?.onFrame(bytes)
+            listener?.onFrame(bytes.toByteArray())
         }
 
         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {

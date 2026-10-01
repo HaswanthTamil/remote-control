@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<lint>
+    <!--
+        mipmap-anydpi-v26 holds <adaptive-icon>, which requires API 26. The
+        ObsoleteSdkInt check flags the "-v26" qualifier because minSdk is 26,
+        but dropping it makes AAPT2 reject the adaptive-icon resources.
+    -->
+    <issue id="ObsoleteSdkInt" severity="ignore" />
+</lint>
