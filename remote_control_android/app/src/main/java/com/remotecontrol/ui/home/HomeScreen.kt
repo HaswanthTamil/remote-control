@@ -12,15 +12,20 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.DesktopWindows
+import androidx.compose.material.icons.rounded.Cast
+import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.RadioButtonChecked
+import androidx.compose.material.icons.rounded.RadioButtonUnchecked
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Terminal
-import androidx.compose.material3.Icon
+import androidx.compose.material.icons.rounded.VpnKey
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -28,20 +33,26 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.remotecontrol.data.ConnectionState
 import com.remotecontrol.data.RemoteSession
-import com.remotecontrol.ui.components.AppTile
+import com.remotecontrol.ui.components.ActionRow
 import com.remotecontrol.ui.components.ConnectionPill
 import com.remotecontrol.ui.components.Eyebrow
 import com.remotecontrol.ui.components.GhostButton
 import com.remotecontrol.ui.components.SectionCard
+import com.remotecontrol.ui.components.SectionHeader
+import com.remotecontrol.ui.components.StatusDot
 import com.remotecontrol.ui.components.shortDisplay
 import com.remotecontrol.ui.theme.MonoSmallTextStyle
 import com.remotecontrol.ui.theme.MonoTextStyle
 import com.remotecontrol.ui.theme.Palette
+import com.remotecontrol.ui.theme.Radii
+import com.remotecontrol.ui.theme.Space
 
 @Composable
 fun HomeScreen(
@@ -59,44 +70,84 @@ fun HomeScreen(
             .fillMaxSize()
             .background(Palette.Background)
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp, vertical = 12.dp),
+            .padding(horizontal = Space.gutter),
     ) {
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(Space.lg))
+
         Row(
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.Top,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
                 Eyebrow("Remote Control")
-                Text("Home", style = MaterialTheme.typography.displaySmall, color = Palette.TextPrimary)
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = "Your laptop",
+                    style = MaterialTheme.typography.displaySmall,
+                    color = Palette.TextPrimary,
+                )
             }
-            ConnectionPill(state = connection, host = config.relayHost)
+            ConnectionPill(state = connection)
         }
 
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(Space.xl))
+
+        /* ---------------- link status ---------------- */
 
         SectionCard {
-            Text(
-                text = "Laptop link",
-                style = MaterialTheme.typography.titleMedium,
-                color = Palette.TextPrimary,
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = when (connection) {
-                    ConnectionState.READY ->
-                        "Authenticated with the relay. Commands and screen control are live."
-
-                    ConnectionState.SUPERSEDED ->
-                        "Another Remote Control client took over this device slot. Close it and reconnect."
-
-                    else -> "Waiting for the relay to authenticate this phone."
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = Palette.TextMuted,
-            )
-            Spacer(Modifier.height(12.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(Radii.chip)
+                        .background(Palette.accentWash(Palette.AccentBlue))
+                        .border(1.dp, Palette.AccentBlue.copy(alpha = 0.22f), Radii.chip),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    androidx.compose.material3.Icon(
+                        Icons.Rounded.Link,
+                        contentDescription = null,
+                        tint = Palette.AccentBlue,
+                        modifier = Modifier.size(19.dp),
+                    )
+                }
+                Spacer(Modifier.size(Space.md))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = when (connection) {
+                            ConnectionState.READY -> "Linked"
+                            ConnectionState.SUPERSEDED -> "Slot taken"
+                            ConnectionState.OFFLINE -> "Not linked"
+                            else -> "Linking"
+                        },
+                        style = MaterialTheme.typography.titleMedium,
+                        color = Palette.TextPrimary,
+                    )
+                    Text(
+                        text = when (connection) {
+                            ConnectionState.READY -> "Commands and screen control are live."
+                            ConnectionState.SUPERSEDED ->
+                                "Another Remote Control client claimed this slot. Close it, then reconnect."
+
+                            ConnectionState.OFFLINE -> "Waiting for the relay to answer this phone."
+                            else -> "Signing the relay challenge."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Palette.TextMuted,
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(Space.lg))
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(Radii.chip)
+                    .background(Palette.Surface)
+                    .padding(horizontal = Space.md, vertical = Space.sm),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Text(
                     text = config.serverUrl,
                     style = MonoTextStyle,
@@ -105,87 +156,137 @@ fun HomeScreen(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
-                Spacer(Modifier.size(12.dp))
-                GhostButton(text = "Reconnect", onClick = { session.reconnect() })
+                Spacer(Modifier.width(Space.sm))
+                androidx.compose.material3.Icon(
+                    Icons.Rounded.ChevronRight,
+                    contentDescription = null,
+                    tint = Palette.TextGhost,
+                    modifier = Modifier.size(16.dp),
+                )
             }
-            Spacer(Modifier.height(10.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                StatusBadge("Paired", if (session.isPaired) "yes" else "no", session.isPaired)
-                StatusBadge("Device", session.deviceId.shortDisplay())
+
+            Spacer(Modifier.height(Space.md))
+
+            Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+                StatusBadge(
+                    icon = Icons.Rounded.VpnKey,
+                    label = "Identity",
+                    value = session.deviceId.shortDisplay(),
+                    active = session.deviceId.isNotEmpty(),
+                    modifier = Modifier.weight(1f),
+                )
+                StatusBadge(
+                    icon = if (session.isPaired) Icons.Rounded.RadioButtonChecked else Icons.Rounded.RadioButtonUnchecked,
+                    label = "Paired",
+                    value = if (session.isPaired) "yes" else "no",
+                    active = session.isPaired,
+                    modifier = Modifier.weight(1f),
+                )
             }
         }
 
-        Spacer(Modifier.height(26.dp))
-        Eyebrow("Apps")
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(Space.xxl))
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(18.dp),
-        ) {
-            AppTile(
-                icon = Icons.Rounded.DesktopWindows,
-                title = "Remote",
-                subtitle = "Screen + input",
+        /* ---------------- actions ---------------- */
+
+        SectionHeader("Control")
+        SectionCard(modifier = Modifier.padding(horizontal = 0.dp)) {
+            ActionRow(
+                icon = Icons.Rounded.Cast,
+                title = "Remote screen",
+                subtitle = "Watch the laptop and control it with touch",
                 accent = Palette.AccentBlue,
                 onClick = onOpenRemote,
-                modifier = Modifier.weight(1f),
+                trailingText = "Landscape fills best",
             )
-            AppTile(
+            HairDivider()
+            ActionRow(
                 icon = Icons.Rounded.Terminal,
                 title = "Terminal",
-                subtitle = "Run commands",
-                accent = Palette.TextPrimary,
+                subtitle = "Run commands on the remote shell",
+                accent = Palette.Accent,
                 onClick = onOpenTerminal,
-                modifier = Modifier.weight(1f),
             )
-        }
-
-        Spacer(Modifier.height(14.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(18.dp),
-        ) {
-            AppTile(
+            HairDivider()
+            ActionRow(
                 icon = Icons.Rounded.Settings,
                 title = "Settings",
-                subtitle = "Relay & security",
+                subtitle = "Relay, pairing, security",
                 accent = Palette.Warning,
                 onClick = onOpenSettings,
-                modifier = Modifier.weight(1f),
             )
-            Spacer(Modifier.weight(1f))
         }
 
-        Spacer(Modifier.height(26.dp))
+        Spacer(Modifier.height(Space.xxl))
+
+        /* ---------------- session ---------------- */
+
+        SectionHeader("Session")
         GhostButton(
-            text = "Lock app",
+            text = "Lock now",
             icon = Icons.Rounded.Lock,
             onClick = onLock,
             modifier = Modifier.fillMaxWidth(),
         )
-        Spacer(Modifier.height(20.dp))
+
+        Spacer(Modifier.height(Space.md))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(Space.sm),
+        ) {
+            GhostButton(
+                text = "Reconnect",
+                onClick = { session.reconnect() },
+                modifier = Modifier.weight(1f),
+            )
+        }
+
+        Spacer(Modifier.height(Space.xxxl))
     }
 }
 
 @Composable
-private fun StatusBadge(label: String, value: String, active: Boolean = true) {
+private fun HairDivider() {
+    Box(
+        Modifier
+            .padding(start = Space.md)
+            .fillMaxWidth()
+            .height(1.dp)
+            .background(Palette.Divider),
+    )
+}
+
+@Composable
+private fun StatusBadge(
+    icon: ImageVector,
+    label: String,
+    value: String,
+    active: Boolean,
+    modifier: Modifier = Modifier,
+) {
     Row(
-        modifier = Modifier
-            .clip(RoundedCornerShape(9.dp))
+        modifier = modifier
+            .clip(RoundedCornerShape(11.dp))
             .background(Palette.Surface)
-            .border(1.dp, Palette.BorderSoft, RoundedCornerShape(9.dp))
-            .padding(horizontal = 10.dp, vertical = 6.dp),
+            .border(1.dp, Palette.BorderSoft, RoundedCornerShape(11.dp))
+            .padding(horizontal = Space.sm, vertical = Space.sm),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            Modifier
-                .size(6.dp)
-                .clip(RoundedCornerShape(3.dp))
-                .background(if (active) Palette.Accent else Palette.TextGhost),
+        StatusDot(color = if (active) Palette.Accent else Palette.TextGhost, size = 6.dp)
+        androidx.compose.material3.Icon(
+            icon,
+            contentDescription = null,
+            tint = if (active) Palette.Accent else Palette.TextGhost,
+            modifier = Modifier.size(14.dp),
         )
         Text(label, style = MaterialTheme.typography.labelSmall, color = Palette.TextGhost)
-        Text(value, style = MonoSmallTextStyle, color = Palette.TextSecondary)
+        Text(
+            text = value,
+            style = MonoSmallTextStyle,
+            color = Palette.TextSecondary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }

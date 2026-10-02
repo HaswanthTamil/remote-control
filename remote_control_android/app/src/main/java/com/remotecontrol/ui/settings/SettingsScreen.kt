@@ -4,27 +4,33 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.DeleteForever
 import androidx.compose.material.icons.rounded.Fingerprint
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -48,19 +54,24 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.remotecontrol.config.AppConfig
+import com.remotecontrol.data.ConnectionState
 import com.remotecontrol.data.RemoteSession
+import com.remotecontrol.ui.components.ActionRow
 import com.remotecontrol.ui.components.ConnectionPill
-import com.remotecontrol.ui.components.Eyebrow
-import com.remotecontrol.ui.components.GhostButton
+import com.remotecontrol.ui.components.HairLine
+import com.remotecontrol.ui.components.IconAction as AppIconAction
 import com.remotecontrol.ui.components.InfoRow
 import com.remotecontrol.ui.components.PrimaryButton
 import com.remotecontrol.ui.components.SectionCard
+import com.remotecontrol.ui.components.SectionHeader
 import com.remotecontrol.ui.components.TopBar
 import com.remotecontrol.ui.components.orPlaceholder
 import com.remotecontrol.ui.lock.BiometricGate
 import com.remotecontrol.ui.lock.BiometricStatus
 import com.remotecontrol.ui.theme.MonoTextStyle
 import com.remotecontrol.ui.theme.Palette
+import com.remotecontrol.ui.theme.Radii
+import com.remotecontrol.ui.theme.Space
 
 @Composable
 fun SettingsScreen(session: RemoteSession, onBack: () -> Unit) {
@@ -75,207 +86,277 @@ fun SettingsScreen(session: RemoteSession, onBack: () -> Unit) {
     var showPasscode by rememberSaveable { mutableStateOf(false) }
     var biometricLock by rememberSaveable(config) { mutableStateOf(config.biometricLockEnabled) }
     var lockOnBackground by rememberSaveable(config) { mutableStateOf(config.lockOnBackground) }
+    var confirmRegenerate by rememberSaveable { mutableStateOf(false) }
 
     val biometricStatus = remember { BiometricGate.statusOf(context) }
     val biometricReady = biometricStatus == BiometricStatus.AVAILABLE
+
+    val trimmedUrl = serverUrl.trim()
+    val trimmedToken = pairToken.trim()
+    val dirty = trimmedUrl != config.serverUrl ||
+        trimmedToken != config.pairToken ||
+        passcode != config.passcode ||
+        biometricLock != config.biometricLockEnabled ||
+        lockOnBackground != config.lockOnBackground
+
+    val connected = connection == ConnectionState.READY
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .statusBarsPadding()
             .navigationBarsPadding()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp, vertical = 12.dp),
+            .imePadding(),
     ) {
         TopBar(
             title = "Settings",
+            subtitle = when (connection) {
+                ConnectionState.READY -> "Connected to ${config.relayHost}"
+                ConnectionState.SUPERSEDED -> "Slot taken by another client"
+                else -> "Not connected"
+            },
+            compact = true,
             onBack = onBack,
-            modifier = Modifier.padding(bottom = 12.dp),
+            modifier = Modifier.padding(horizontal = Space.md),
             trailing = { ConnectionPill(state = connection) },
         )
 
-        SectionCard {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Rounded.Link, contentDescription = null, tint = Palette.AccentBlue)
-                Spacer(Modifier.width(8.dp))
-                Eyebrow("Relay")
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = Space.md),
+        ) {
+            /* ---------------- relay ---------------- */
+
+            SectionCard {
+                SectionHeader(
+                    title = "Relay",
+                    trailing = {
+                        Icon(
+                            Icons.Rounded.Link,
+                            contentDescription = null,
+                            tint = Palette.AccentBlue,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    },
+                )
+
+                FieldLabel("Relay URL")
+                OutlinedTextField(
+                    value = serverUrl,
+                    onValueChange = { serverUrl = it },
+                    singleLine = true,
+                    textStyle = MonoTextStyle,
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.None,
+                        imeAction = ImeAction.Next,
+                    ),
+                    colors = fieldColors(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Hint("https:// and http:// are upgraded to wss:// and ws:// automatically")
+
+                Spacer(Modifier.height(Space.md))
+                FieldLabel("Pairing token")
+                OutlinedTextField(
+                    value = pairToken,
+                    onValueChange = { pairToken = it },
+                    singleLine = true,
+                    textStyle = MonoTextStyle,
+                    visualTransformation = if (showPairToken) {
+                        VisualTransformation.None
+                    } else {
+                        PasswordVisualTransformation()
+                    },
+                    trailingIcon = {
+                        RevealToggle(
+                            revealed = showPairToken,
+                            onToggle = { showPairToken = !showPairToken },
+                        )
+                    },
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None),
+                    colors = fieldColors(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Hint("Only needed the first time this phone pairs; the relay keeps the public key afterwards")
             }
-            Spacer(Modifier.height(10.dp))
 
-            FieldLabel("Relay URL")
-            OutlinedTextField(
-                value = serverUrl,
-                onValueChange = { serverUrl = it },
-                singleLine = true,
-                textStyle = MonoTextStyle,
-                keyboardOptions = KeyboardOptions(
-                    capitalization = KeyboardCapitalization.None,
-                    imeAction = ImeAction.Next,
-                ),
-                colors = fieldColors(),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = "https:// and http:// are upgraded to wss:// and ws:// automatically",
-                style = MaterialTheme.typography.labelSmall,
-                color = Palette.TextGhost,
-            )
+            Spacer(Modifier.height(Space.lg))
 
-            Spacer(Modifier.height(14.dp))
-            FieldLabel("Pairing token")
-            OutlinedTextField(
-                value = pairToken,
-                onValueChange = { pairToken = it },
-                singleLine = true,
-                textStyle = MonoTextStyle,
-                visualTransformation = if (showPairToken) {
-                    VisualTransformation.None
-                } else {
-                    PasswordVisualTransformation()
-                },
-                trailingIcon = {
-                    Text(
-                        text = if (showPairToken) "Hide" else "Show",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Palette.AccentBlue,
-                        modifier = Modifier
-                            .padding(end = 12.dp)
-                            .clickable { showPairToken = !showPairToken },
-                    )
-                },
-                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None),
-                colors = fieldColors(),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Text(
-                text = "Only needed the first time this phone pairs; the relay keeps the public key afterwards.",
-                style = MaterialTheme.typography.labelSmall,
-                color = Palette.TextGhost,
-            )
+            /* ---------------- app lock ---------------- */
 
-            Spacer(Modifier.height(16.dp))
-            PrimaryButton(
-                text = "Save & reconnect",
-                onClick = {
-                    session.applyConfig(
-                        config.copy(
-                            serverUrl = serverUrl.trim(),
-                            pairToken = pairToken.trim(),
-                            passcode = passcode,
-                            biometricLockEnabled = biometricLock,
-                            lockOnBackground = lockOnBackground,
-                        ),
-                    )
-                    toast(context, "Reconnecting to ${AppConfig.toWebSocketUrl(serverUrl.trim())}")
-                },
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
+            SectionCard {
+                SectionHeader(
+                    title = "App lock",
+                    trailing = {
+                        Icon(
+                            Icons.Rounded.Fingerprint,
+                            contentDescription = null,
+                            tint = if (biometricLock) Palette.AccentBlue else Palette.TextGhost,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    },
+                )
 
-        Spacer(Modifier.height(18.dp))
+                ToggleRow(
+                    title = "Require biometrics",
+                    subtitle = when {
+                        !biometricReady -> "Unavailable on this device — the passcode stays as the gate"
+                        biometricLock -> "Fingerprint or face unlocks the app; passcode is the fallback"
+                        else -> "Off — the passcode alone opens the app"
+                    },
+                    checked = biometricLock,
+                    enabled = biometricReady,
+                    onChange = { biometricLock = it },
+                )
+                HairLine(inset = Space.lg)
+                ToggleRow(
+                    title = "Lock when leaving the app",
+                    subtitle = "Re-lock as soon as Remote Control goes to the background",
+                    checked = lockOnBackground,
+                    onChange = { lockOnBackground = it },
+                )
 
-        SectionCard {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Rounded.Fingerprint, contentDescription = null, tint = Palette.AccentBlue)
-                Spacer(Modifier.width(8.dp))
-                Eyebrow("App lock")
+                Spacer(Modifier.height(Space.md))
+                FieldLabel(
+                    if (biometricReady) "Passcode (fallback)" else "Passcode",
+                )
+                OutlinedTextField(
+                    value = passcode,
+                    onValueChange = { passcode = it.filter { char -> char.isLetterOrDigit() }.take(24) },
+                    singleLine = true,
+                    textStyle = MonoTextStyle,
+                    visualTransformation = if (showPasscode) {
+                        VisualTransformation.None
+                    } else {
+                        PasswordVisualTransformation()
+                    },
+                    trailingIcon = {
+                        RevealToggle(
+                            revealed = showPasscode,
+                            onToggle = { showPasscode = !showPasscode },
+                        )
+                    },
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None),
+                    colors = fieldColors(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Hint("Stored on this device only. The relay never sees it.")
             }
-            Spacer(Modifier.height(10.dp))
 
-            ToggleRow(
-                title = "Require biometrics",
-                subtitle = when {
-                    !biometricReady -> "Unavailable on this device - the passcode stays as the gate"
-                    biometricLock -> "Fingerprint or face unlocks the app; passcode is the fallback"
-                    else -> "Off - the passcode alone opens the app"
-                },
-                checked = biometricLock,
-                enabled = biometricReady,
-                onChange = { biometricLock = it },
-            )
-            Spacer(Modifier.height(6.dp))
-            ToggleRow(
-                title = "Lock when leaving the app",
-                subtitle = "Re-lock as soon as Remote Control goes to the background",
-                checked = lockOnBackground,
-                onChange = { lockOnBackground = it },
-            )
+            Spacer(Modifier.height(Space.lg))
 
-            Spacer(Modifier.height(12.dp))
-            FieldLabel("Passcode (fallback / passcode-only)")
-            OutlinedTextField(
-                value = passcode,
-                onValueChange = { passcode = it.filter { char -> char.isLetterOrDigit() }.take(24) },
-                singleLine = true,
-                textStyle = MonoTextStyle,
-                visualTransformation = if (showPasscode) {
-                    VisualTransformation.None
-                } else {
-                    PasswordVisualTransformation()
-                },
-                trailingIcon = {
-                    Text(
-                        text = if (showPasscode) "Hide" else "Show",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Palette.AccentBlue,
-                        modifier = Modifier
-                            .padding(end = 12.dp)
-                            .clickable { showPasscode = !showPasscode },
-                    )
-                },
-                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None),
-                colors = fieldColors(),
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
+            /* ---------------- identity ---------------- */
 
-        Spacer(Modifier.height(18.dp))
+            SectionCard {
+                SectionHeader(
+                    title = "Device identity",
+                    trailing = {
+                        Icon(
+                            Icons.Rounded.Key,
+                            contentDescription = null,
+                            tint = Palette.Accent,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    },
+                )
+                InfoRow("Device id", session.deviceId.orPlaceholder(), monospace = true)
+                HairLine(inset = Space.lg)
+                InfoRow("Public key", session.publicKeyHex.orPlaceholder(), monospace = true)
+                HairLine(inset = Space.lg)
+                InfoRow("Paired with", config.relayHost)
+                HairLine(inset = Space.lg)
+                InfoRow("Relay URL", config.relayUrl, monospace = true)
 
-        SectionCard {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Rounded.Key, contentDescription = null, tint = Palette.Accent)
-                Spacer(Modifier.width(8.dp))
-                Eyebrow("Device identity")
-            }
-            Spacer(Modifier.height(10.dp))
-            InfoRow("Device id", session.deviceId.orPlaceholder(), monospace = true)
-            InfoRow("Public key", session.publicKeyHex.orPlaceholder(), monospace = true)
-            InfoRow("Paired with", config.relayHost)
-            InfoRow("Relay URL", config.relayUrl, monospace = true)
-
-            Spacer(Modifier.height(12.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                GhostButton(
-                    text = "Copy device id",
+                Spacer(Modifier.height(Space.sm))
+                ActionRow(
                     icon = Icons.Rounded.ContentCopy,
+                    title = "Copy device id",
+                    subtitle = "Paste it on the laptop when it asks who is in control",
+                    accent = Palette.AccentBlue,
                     onClick = { copy(context, "Device id", session.deviceId) },
                 )
-                GhostButton(
-                    text = "Reconnect",
+                HairLine(inset = Space.lg)
+                ActionRow(
                     icon = Icons.Rounded.Refresh,
+                    title = "Reconnect",
+                    subtitle = "Close and reopen the relay connection",
+                    accent = Palette.AccentBlue,
                     onClick = { session.reconnect() },
                 )
             }
-            Spacer(Modifier.height(8.dp))
-            GhostButton(
-                text = "Forget pairing (re-pair on next connect)",
-                onClick = { session.clearPairing() },
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(Modifier.height(8.dp))
-            GhostButton(
-                text = "Generate a new identity key",
-                contentColor = Palette.Danger,
-                onClick = {
-                    session.regenerateIdentity()
-                    toast(context, "New keypair generated - re-pair with the relay")
-                },
-                modifier = Modifier.fillMaxWidth(),
-            )
+
+            Spacer(Modifier.height(Space.lg))
+
+            /* ---------------- danger zone ---------------- */
+
+            SectionCard {
+                SectionHeader(title = "Pairing")
+                ActionRow(
+                    icon = Icons.Rounded.DeleteForever,
+                    title = "Forget this pairing",
+                    subtitle = "Keeps the keypair, so the next connect re-pairs silently",
+                    accent = Palette.Warning,
+                    onClick = {
+                        session.clearPairing()
+                        toast(context, "Pairing cleared — the next connect re-pairs")
+                    },
+                )
+                HairLine(inset = Space.lg)
+                ActionRow(
+                    icon = Icons.Rounded.Key,
+                    title = "Generate a new identity key",
+                    subtitle = if (confirmRegenerate) {
+                        "Tap again to confirm — the relay will reject this device until it re-pairs"
+                    } else {
+                        "Rotates the keypair; the laptop must pair again"
+                    },
+                    accent = Palette.Danger,
+                    onClick = {
+                        if (confirmRegenerate) {
+                            session.regenerateIdentity()
+                            confirmRegenerate = false
+                            toast(context, "New keypair generated — re-pair with the relay")
+                        } else {
+                            confirmRegenerate = true
+                        }
+                    },
+                    trailingText = if (confirmRegenerate) "Confirm" else null,
+                )
+            }
+
+            Spacer(Modifier.height(Space.lg))
         }
 
-        Spacer(Modifier.height(28.dp))
+        /* ---------------- pinned save bar ---------------- */
+
+        AnimatedVisibility(visible = dirty) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Palette.Surface.copy(alpha = 0.98f))
+                    .padding(horizontal = Space.md, vertical = Space.md),
+            ) {
+                PrimaryButton(
+                    text = "Save & reconnect",
+                    icon = Icons.Rounded.Refresh,
+                    onClick = {
+                        session.applyConfig(
+                            config.copy(
+                                serverUrl = trimmedUrl,
+                                pairToken = trimmedToken,
+                                passcode = passcode,
+                                biometricLockEnabled = biometricLock,
+                                lockOnBackground = lockOnBackground,
+                            ),
+                        )
+                        toast(context, "Reconnecting to ${AppConfig.toWebSocketUrl(trimmedUrl)}")
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
     }
 }
 
@@ -285,7 +366,30 @@ private fun FieldLabel(text: String) {
         text = text,
         style = MaterialTheme.typography.labelMedium,
         color = Palette.TextMuted,
-        modifier = Modifier.padding(bottom = 6.dp),
+        modifier = Modifier.padding(bottom = Space.xs),
+    )
+}
+
+@Composable
+private fun Hint(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall,
+        color = Palette.TextGhost,
+        modifier = Modifier.padding(top = Space.xs),
+    )
+}
+
+@Composable
+private fun RevealToggle(revealed: Boolean, onToggle: () -> Unit) {
+    AppIconAction(
+        icon = if (revealed) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+        contentDescription = if (revealed) "Hide value" else "Show value",
+        onClick = onToggle,
+        container = Palette.SurfaceOverlay,
+        borderColor = Palette.BorderSoft,
+        size = 34.dp,
+        modifier = Modifier.padding(end = Space.xs),
     )
 }
 
@@ -300,7 +404,13 @@ private fun ToggleRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 6.dp),
+            .toggleable(
+                value = checked,
+                enabled = enabled,
+                role = androidx.compose.ui.semantics.Role.Switch,
+                onValueChange = onChange,
+            )
+            .padding(vertical = Space.md),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
@@ -315,13 +425,15 @@ private fun ToggleRow(
                 color = Palette.TextGhost,
             )
         }
+        Spacer(Modifier.width(Space.md))
         Switch(
             checked = checked,
             enabled = enabled,
-            onCheckedChange = onChange,
+            onCheckedChange = null,
             colors = SwitchDefaults.colors(
                 checkedThumbColor = Palette.Background,
                 checkedTrackColor = Palette.AccentBlue,
+                checkedBorderColor = Palette.AccentBlue,
                 uncheckedThumbColor = Palette.TextGhost,
                 uncheckedTrackColor = Palette.Surface,
                 uncheckedBorderColor = Palette.Border,

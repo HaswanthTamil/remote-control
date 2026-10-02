@@ -2,6 +2,7 @@ package com.remotecontrol.ui.lock
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,6 +25,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Fingerprint
 import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.Shield
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -48,8 +50,14 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.remotecontrol.config.AppConfig
+import androidx.compose.material.icons.rounded.ErrorOutline
+import com.remotecontrol.ui.components.Eyebrow
+import com.remotecontrol.ui.components.GhostButton
+import com.remotecontrol.ui.components.HairLine
 import com.remotecontrol.ui.components.PrimaryButton
 import com.remotecontrol.ui.theme.Palette
+import com.remotecontrol.ui.theme.Radii
+import com.remotecontrol.ui.theme.Space
 
 /**
  * The app's front door. Nothing else in the app renders until the user approves
@@ -93,10 +101,10 @@ fun LockScreen(
     }
 
     val statusLine = when {
-        !config.biometricLockEnabled -> "Biometric lock is off - passcode only"
-        status == BiometricStatus.AVAILABLE -> "Biometrics ready - look at your device or touch the sensor"
-        status == BiometricStatus.NONE_ENROLLED -> "No biometrics enrolled on this device - using the passcode"
-        status == BiometricStatus.NO_HARDWARE -> "No biometric hardware - using the passcode"
+        !config.biometricLockEnabled -> "Biometric lock is off — passcode only"
+        status == BiometricStatus.AVAILABLE -> "Biometrics ready — look at your device or touch the sensor"
+        status == BiometricStatus.NONE_ENROLLED -> "No biometrics enrolled on this device — using the passcode"
+        status == BiometricStatus.NO_HARDWARE -> "No biometric hardware — using the passcode"
         else -> "Biometrics unavailable - using the passcode"
     }
 
@@ -112,16 +120,16 @@ fun LockScreen(
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
                 .imePadding()
-                .padding(horizontal = 24.dp, vertical = 32.dp),
+                .padding(horizontal = Space.xl, vertical = Space.xxl),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
             Box(
                 modifier = Modifier
                     .size(78.dp)
-                    .clip(RoundedCornerShape(26.dp))
+                    .clip(Radii.card)
                     .background(Palette.Surface)
-                    .border(1.dp, Palette.BorderSoft, RoundedCornerShape(26.dp)),
+                    .border(1.dp, Palette.BorderSoft, Radii.card),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
@@ -132,20 +140,30 @@ fun LockScreen(
                 )
             }
 
-            Spacer(Modifier.height(22.dp))
-            Text("Locked", style = MaterialTheme.typography.displaySmall, color = Palette.TextPrimary)
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(Space.lg))
+            Eyebrow("Remote control")
+            Spacer(Modifier.height(Space.xs))
             Text(
-                text = "Approve with biometrics to open Remote Control",
+                text = "Locked",
+                style = MaterialTheme.typography.displaySmall,
+                color = Palette.TextPrimary,
+            )
+            Spacer(Modifier.height(Space.xs))
+            Text(
+                text = if (biometricsUsable) {
+                    "Approve with biometrics to open Remote Control"
+                } else {
+                    "Enter your passcode to open Remote Control"
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 color = Palette.TextMuted,
                 textAlign = TextAlign.Center,
             )
 
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(Space.lg))
             StatusChip(statusLine, biometricsUsable)
 
-            Spacer(Modifier.height(28.dp))
+            Spacer(Modifier.height(Space.xl))
 
             if (biometricsUsable) {
                 PrimaryButton(
@@ -156,9 +174,9 @@ fun LockScreen(
                     onClick = { gate?.authenticate() },
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Spacer(Modifier.height(18.dp))
+                Spacer(Modifier.height(Space.lg))
                 FallbackDivider()
-                Spacer(Modifier.height(18.dp))
+                Spacer(Modifier.height(Space.lg))
             }
 
             OutlinedTextField(
@@ -169,6 +187,16 @@ fun LockScreen(
                 },
                 label = { Text("Passcode") },
                 singleLine = true,
+                isError = error != null,
+                supportingText = error?.let { message ->
+                    {
+                        Text(
+                            text = message,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Palette.Danger,
+                        )
+                    }
+                },
                 visualTransformation = PasswordVisualTransformation(),
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Password,
@@ -188,6 +216,8 @@ fun LockScreen(
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = Palette.AccentBlue,
                     unfocusedBorderColor = Palette.Border,
+                    errorBorderColor = Palette.Danger,
+                    errorContainerColor = Palette.BackgroundDeep,
                     focusedContainerColor = Palette.BackgroundDeep,
                     unfocusedContainerColor = Palette.BackgroundDeep,
                     focusedTextColor = Palette.TextPrimary,
@@ -195,33 +225,43 @@ fun LockScreen(
                     cursorColor = Palette.AccentBlue,
                     focusedLabelColor = Palette.TextMuted,
                     unfocusedLabelColor = Palette.TextGhost,
+                    errorLabelColor = Palette.Danger,
                 ),
                 modifier = Modifier.fillMaxWidth(),
             )
 
-            Spacer(Modifier.height(14.dp))
-            PrimaryButton(
-                text = "Unlock with passcode",
+            Spacer(Modifier.height(Space.md))
+            UnlockButton(
+                primary = !biometricsUsable,
                 onClick = {
                     if (passcode == config.passcode) {
                         passcode = ""
                         error = null
                         onUnlocked()
                     } else {
-                        error = "Wrong passcode"
+                        error = "That passcode doesn't match"
                         passcode = ""
                     }
                 },
-                modifier = Modifier.fillMaxWidth(),
             )
 
-            Spacer(Modifier.height(14.dp))
-            Text(
-                text = error ?: " ",
-                style = MaterialTheme.typography.bodySmall,
-                color = Palette.Danger,
-                textAlign = TextAlign.Center,
-            )
+            Spacer(Modifier.height(Space.lg))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Space.sm),
+            ) {
+                Icon(
+                    Icons.Rounded.Shield,
+                    contentDescription = null,
+                    tint = Palette.TextGhost,
+                    modifier = Modifier.size(14.dp),
+                )
+                Text(
+                    text = "Keys never leave this phone.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Palette.TextGhost,
+                )
+            }
         }
     }
 }
@@ -237,7 +277,7 @@ private fun StatusChip(text: String, highlight: Boolean) {
                 if (highlight) Palette.AccentBlue.copy(alpha = 0.35f) else Palette.BorderSoft,
                 CircleShape,
             )
-            .padding(horizontal = 14.dp, vertical = 8.dp),
+            .padding(horizontal = Space.md, vertical = Space.sm),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -268,12 +308,33 @@ private fun FallbackDivider() {
                 .height(1.dp)
                 .background(Palette.BorderSoft),
         )
-        Text("or use passcode", style = MaterialTheme.typography.labelSmall, color = Color(0xFF59616B))
+        Text(
+            text = "or use passcode",
+            style = MaterialTheme.typography.labelSmall,
+            color = Palette.TextGhost,
+        )
         Box(
             Modifier
                 .weight(1f)
                 .height(1.dp)
                 .background(Palette.BorderSoft),
+        )
+    }
+}
+
+@Composable
+private fun UnlockButton(primary: Boolean, onClick: () -> Unit) {
+    if (primary) {
+        PrimaryButton(
+            text = "Unlock with passcode",
+            onClick = onClick,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    } else {
+        GhostButton(
+            text = "Unlock with passcode",
+            onClick = onClick,
+            modifier = Modifier.fillMaxWidth(),
         )
     }
 }

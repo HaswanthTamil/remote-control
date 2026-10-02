@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -33,7 +34,11 @@ import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.material.icons.rounded.Terminal
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -60,15 +65,21 @@ import com.remotecontrol.data.ConnectionState
 import com.remotecontrol.data.LineKind
 import com.remotecontrol.data.RemoteSession
 import com.remotecontrol.data.TerminalLine
+import com.remotecontrol.ui.components.CenteredEmptyState
 import com.remotecontrol.ui.components.ConnectionPill
+import com.remotecontrol.ui.components.HairLine
+import com.remotecontrol.ui.components.IconAction
 import com.remotecontrol.ui.components.KeyChip
 import com.remotecontrol.ui.components.TopBar
 import com.remotecontrol.ui.theme.Palette
+import com.remotecontrol.ui.theme.Radii
+import com.remotecontrol.ui.theme.Space
 import com.remotecontrol.ui.theme.TerminalTextStyle
 
 private val QUICK_COMMANDS = listOf("pwd", "ls -la", "uname -a", "uptime", "free -h", "df -h", "top -b -n1")
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 fun TerminalScreen(session: RemoteSession, onBack: () -> Unit) {
     val connection by session.connection.collectAsStateWithLifecycle()
     val lines by session.lines.collectAsStateWithLifecycle()
@@ -100,8 +111,14 @@ fun TerminalScreen(session: RemoteSession, onBack: () -> Unit) {
     ) {
         TopBar(
             title = "Terminal",
+            subtitle = when (connection) {
+                ConnectionState.READY -> "Remote shell · ready"
+                ConnectionState.SUPERSEDED -> "Slot taken by another client"
+                else -> "Not connected"
+            },
+            compact = true,
             onBack = onBack,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            modifier = Modifier.padding(horizontal = Space.md),
             trailing = { ConnectionPill(state = connection) },
         )
 
@@ -123,33 +140,51 @@ fun TerminalScreen(session: RemoteSession, onBack: () -> Unit) {
             }
 
             if (lines.isEmpty()) {
-                Text(
-                    text = "Remote Linux shell\nReady.",
-                    style = TerminalTextStyle,
-                    color = Palette.TextFaint,
-                    modifier = Modifier.align(Alignment.TopStart),
+                CenteredEmptyState(
+                    icon = Icons.Rounded.Terminal,
+                    title = "Nothing has run yet",
+                    body = if (connected) {
+                        "Commands you send appear here, with their output."
+                    } else {
+                        "Waiting for the relay to authenticate this phone."
+                    },
+                    modifier = Modifier.align(Alignment.Center),
+                )
+            }
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = Space.sm)
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = Space.md),
+            horizontalArrangement = Arrangement.spacedBy(Space.sm),
+        ) {
+            QUICK_COMMANDS.forEach { quick ->
+                KeyChip(
+                    text = quick,
+                    onClick = { input = quick },
+                    contentColor = Palette.AccentBlue,
                 )
             }
         }
 
         if (showHistory) {
-            HistoryPanel(
-                history = history,
-                onPick = {
-                    input = it
-                    showHistory = false
-                },
-            )
-        } else {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ModalBottomSheet(
+                onDismissRequest = { showHistory = false },
+                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+                containerColor = Palette.SurfaceRaised,
+                contentColor = Palette.TextPrimary,
+                dragHandle = { HairLine(modifier = Modifier.padding(vertical = Space.sm)) },
             ) {
-                QUICK_COMMANDS.take(4).forEach { quick ->
-                    KeyChip(text = quick, onClick = { input = quick })
-                }
+                HistoryPanel(
+                    history = history,
+                    onPick = {
+                        input = it
+                        showHistory = false
+                    },
+                )
             }
         }
 
@@ -177,7 +212,7 @@ fun TerminalScreen(session: RemoteSession, onBack: () -> Unit) {
             focusRequester = focusRequester,
         )
 
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(Space.sm))
     }
 }
 
@@ -198,35 +233,67 @@ private fun TerminalRow(line: TerminalLine) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun HistoryPanel(history: List<String>, onPick: (String) -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 6.dp)
-            .heightIn(max = 200.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(Palette.SurfaceRaised)
-            .border(1.dp, Palette.BorderSoft, RoundedCornerShape(14.dp))
+            .heightIn(max = 380.dp)
             .verticalScroll(rememberScrollState())
-            .padding(vertical = 6.dp),
+            .padding(horizontal = Space.md)
+            .padding(bottom = Space.xxl),
     ) {
-        if (history.isEmpty()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = Space.sm),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Rounded.History,
+                contentDescription = null,
+                tint = Palette.TextGhost,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(Space.sm))
             Text(
-                text = "No commands yet",
-                style = TerminalTextStyle,
+                text = "Command history",
+                style = MaterialTheme.typography.titleMedium,
+                color = Palette.TextPrimary,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = if (history.isEmpty()) "empty" else "${history.size} saved",
+                style = MaterialTheme.typography.labelSmall,
                 color = Palette.TextGhost,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
             )
         }
-        history.forEach { command ->
+
+        if (history.isEmpty()) {
+            Text(
+                text = "Commands you run are kept here so you can reuse them.",
+                style = MaterialTheme.typography.bodySmall,
+                color = Palette.TextGhost,
+                modifier = Modifier.padding(vertical = Space.lg),
+            )
+        }
+
+        history.forEachIndexed { index, command ->
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .clip(Radii.chip)
                     .clickable { onPick(command) }
-                    .padding(horizontal = 14.dp, vertical = 9.dp),
+                    .padding(horizontal = Space.md, vertical = Space.md),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                Text(
+                    text = "${history.size - index}",
+                    style = TerminalTextStyle,
+                    color = Palette.TextGhost,
+                    modifier = Modifier.width(28.dp),
+                )
                 Text("$ ", style = TerminalTextStyle, color = Palette.TextGhost)
                 Text(
                     text = command,
@@ -235,6 +302,7 @@ private fun HistoryPanel(history: List<String>, onPick: (String) -> Unit) {
                     maxLines = 1,
                 )
             }
+            HairLine()
         }
     }
 }
@@ -256,14 +324,15 @@ private fun CommandBar(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 6.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(Palette.Surface)
-            .padding(10.dp),
+            .padding(horizontal = Space.md, vertical = Space.sm)
+            .clip(Radii.card)
+            .background(Palette.SurfaceRaised)
+            .border(1.dp, Palette.BorderSoft, Radii.card)
+            .padding(Space.md),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("$", style = TerminalTextStyle, color = Palette.TextMuted)
-            Spacer(Modifier.width(8.dp))
+            Text("$", style = TerminalTextStyle, color = Palette.Accent)
+            Spacer(Modifier.width(Space.sm))
             OutlinedTextField(
                 value = value,
                 onValueChange = onValueChange,
@@ -296,12 +365,12 @@ private fun CommandBar(
             )
         }
 
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(Space.sm))
 
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(Space.sm),
         ) {
             KeyChip(text = "↑", onClick = { onHistory(-1) }, icon = Icons.Rounded.KeyboardArrowUp)
             KeyChip(text = "↓", onClick = { onHistory(1) }, icon = Icons.Rounded.KeyboardArrowDown)
@@ -320,27 +389,14 @@ private fun CommandBar(
                 active = enabled,
                 contentColor = Palette.Warning,
             )
-            Row(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(11.dp))
-                    .background(if (enabled) Palette.TextPrimary else Palette.ChipBackground)
-                    .clickable(enabled = enabled) { onSubmit() }
-                    .padding(horizontal = 16.dp, vertical = 9.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Icon(
-                    Icons.AutoMirrored.Rounded.Send,
-                    contentDescription = null,
-                    tint = if (enabled) Palette.Background else Palette.TextGhost,
-                    modifier = Modifier.size(16.dp),
-                )
-                Text(
-                    text = "Run",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = if (enabled) Palette.Background else Palette.TextGhost,
-                )
-            }
+            KeyChip(
+                text = "Run",
+                icon = Icons.AutoMirrored.Rounded.Send,
+                enabled = enabled && value.isNotBlank(),
+                active = true,
+                contentColor = Palette.Accent,
+                onClick = onSubmit,
+            )
         }
     }
 }
