@@ -28,18 +28,24 @@ the laptop screen.
 
 Defaults live in `app/build.gradle.kts` and match `remote_control_phone/config.js`:
 
-| Setting  | Default                                     |
-| -------- | ------------------------------------------- |
-| Relay    | `wss://remote-control-lmxu.vercel.app/`      |
-| Pair token | `rc.pairToken (see gitignored env files)`      |
-| Passcode | `laser`                                      |
+| Setting  | Default                                 |
+| -------- | --------------------------------------- |
+| Relay    | `wss://remote-control-lmxu.vercel.app/`  |
+| Pair token | (none - injected per machine)         |
+| Passcode | `laser`                                 |
 
-Override without touching the source:
+The **pair token is never committed**. Create a gitignored `keystore.properties`
+in `remote_control_android/` (next to `settings.gradle.kts`):
+
+```properties
+pairToken=your-pair-token
+```
+
+Override without touching the source (or use `-P rc.pairToken=...`):
 
 ```properties
 # gradle.properties or ~/.gradle/gradle.properties
 rc.serverUrl=wss://your-relay.example/
-rc.pairToken=your-pair-token
 rc.passcode=your-passcode
 ```
 

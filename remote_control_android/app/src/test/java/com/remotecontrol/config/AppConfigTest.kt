@@ -27,10 +27,12 @@ class AppConfigTest {
     }
 
     @Test
-    fun `the shipped defaults match the web client config`() {
+    fun `shipped defaults match the web client config except the pair token`() {
         val config = AppConfig()
         assertEquals("wss://remote-control-lmxu.vercel.app/", config.relayUrl)
-        assertEquals("rc.pairToken (see gitignored env files)", config.pairToken)
+        // The pair token is injected per machine via keystore.properties
+        // (rc.pairToken); it must never have a built-in default.
+        assertEquals("", config.pairToken)
         assertEquals("laser", config.passcode)
         assertEquals(true, config.biometricLockEnabled)
     }

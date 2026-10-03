@@ -7,10 +7,10 @@ plugins {
 }
 
 /*
- * Build-time defaults. They mirror `remote_control_phone/config.js` exactly, so
- * a fresh checkout talks to the same relay with the same pairing token without
- * any extra setup. Override them per machine with a gitignored
- * `keystore.properties` (see README) or with -P flags.
+ * Build-time defaults. They mirror `remote_control_phone/config.js` (minus the
+ * pairing token, which lives only in gitignored dev files). Override per
+ * machine with a gitignored `keystore.properties` (see README) or with -P
+ * flags. The pair token has no source default: builds must inject it.
  */
 val localProps = Properties().apply {
     val file = rootProject.file("keystore.properties")
@@ -39,7 +39,7 @@ android {
         buildConfigField(
             "String",
             "DEFAULT_PAIR_TOKEN",
-            "\"${setting("pairToken", "rc.pairToken", "rc.pairToken (see gitignored env files)")}\"",
+            "\"${setting("pairToken", "rc.pairToken", "")}\"",
         )
         buildConfigField(
             "String",
