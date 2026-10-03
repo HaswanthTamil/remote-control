@@ -19,8 +19,10 @@ terminal and input subsystems keep working. No X11, no screenshots, no xdotool.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -51,10 +53,21 @@ _MAX_W = 1280
 _MAX_H = 1280
 _JPEG_QUALITY = 70
 
-# Timeouts (seconds). SelectSources waits for the human to click the share
-# picker, so it gets a long window; the stream start should be quick.
+# Timeouts (seconds). SelectSources normally replays a stored restore token and
+# returns immediately; only the very first (or a revoked token) shows the share
+# picker, so it still gets a long window. The stream start should be quick.
 _REQUEST_TIMEOUT = 60
 _START_TIMEOUT = 20
+
+# Where the granted restore token lives. The portal front-end keeps the token
+# store in its own persistence DB, so we only need to remember the opaque
+# string between agent runs.
+_TOKEN_FILE = os.path.join(
+    os.environ.get("XDG_STATE_HOME")
+    or os.path.join(os.path.expanduser("~"), ".local", "state"),
+    "remote-control-laptop",
+    "screencast-token",
+)
 
 
 def _in_wayland_session() -> bool:
@@ -66,6 +79,54 @@ def _in_wayland_session() -> bool:
 
 def capture_available() -> bool:
     return _GI_OK and _in_wayland_session()
+
+
+def _load_restore_token() -> str | None:
+    """The token from the last grant; replaying it skips the display picker."""
+    try:
+        with open(_TOKEN_FILE, "r", encoding="utf-8") as handle:
+            token = handle.read().strip()
+    except OSError:
+        return None
+    return token or None
+
+
+def _save_restore_token(token: str) -> None:
+    try:
+        os.makedirs(os.path.dirname(_TOKEN_FILE), exist_ok=True)
+        with open(_TOKEN_FILE, "w", encoding="utf-8") as handle:
+            handle.write(token)
+        os.chmod(_TOKEN_FILE, 0o600)
+    except OSError as exc:
+        print(f"screen: could not persist restore token: {exc}", file=sys.stderr)
+
+
+def _forget_restore_token() -> None:
+    try:
+        os.remove(_TOKEN_FILE)
+    except OSError:
+        pass
+
+
+def first_output_name() -> str | None:
+    """Name of the first enabled Hyprland output, for logging only.
+
+    The portal has no "pick output N" option on Hyprland, so this cannot drive
+    the selection - it just tells us which display the agent is mirroring.
+    """
+    try:
+        out = subprocess.run(
+            ["hyprctl", "monitors", "-j"],
+            capture_output=True, text=True, timeout=3,
+        ).stdout
+        monitors = [m for m in json.loads(out) if not m.get("disabled")]
+    except Exception:
+        return None
+    if not monitors:
+        return None
+    monitors.sort(key=lambda m: (m.get("id", 0),))
+    monitor = monitors[0]
+    return monitor.get("name") or None
 
 
 def _bus_name_owned(conn, name: str) -> bool:
@@ -179,11 +240,48 @@ class ScreenCapture:
         if not ensure_portal_broker():
             self._on_status("screen: xdg-desktop-portal broker unavailable")
             return False
+        self._warn_if_picker_not_automatic()
         self._portal_thread = threading.Thread(
             target=self._run_portal_flow, name="portal", daemon=True
         )
         self._portal_thread.start()
         return True
+
+    @staticmethod
+    def _warn_if_picker_not_automatic():
+        """Explain what will happen if the portal shows its display picker."""
+        try:
+            import hypr_auto_picker
+
+            state, path = hypr_auto_picker.picker_status()
+        except Exception:
+            return
+        if state == "active":
+            return
+        if state == "missing":
+            print(
+                f"screen: the portal's screen-share picker is gone ({path}), so "
+                "mirroring cannot start.\n"
+                "        Fix it with:\n"
+                "          remote_control_laptop/hypr_auto_picker.py --install\n"
+                "          systemctl --user restart xdg-desktop-portal-hyprland.service",
+                file=sys.stderr,
+            )
+            return
+        if state == "other":
+            print(
+                f"screen: the portal uses another screen-share picker ({path}).",
+                file=sys.stderr,
+            )
+            return
+        print(
+            "screen: Hyprland will ask which display to share on the first "
+            "capture.\n"
+            "        To pick it automatically instead:\n"
+            "          remote_control_laptop/hypr_auto_picker.py --install\n"
+            "          systemctl --user restart xdg-desktop-portal-hyprland.service",
+            file=sys.stderr,
+        )
 
     def stop(self):
         self._capture_stop.set()
@@ -236,27 +334,25 @@ class ScreenCapture:
         self._on_status("screen: portal session created")
 
         # 2. SelectSources --------------------------------------------------
-        opts = {
-            "handle_token": GLib.Variant("s", uuid.uuid4().hex),
-            "types": GLib.Variant("u", 1),          # 1 = MONITOR
-            "multiple": GLib.Variant("b", False),
-            "persist_mode": GLib.Variant("u", 2),   # remember the choice
-        }
-        self._on_status(
-            "screen: requesting sources (click a monitor in the picker)"
-        )
-        req = self._call(
-            proxy, "SelectSources", "(oa{sv})", (self._session_handle, opts)
-        )
-        if req is None:
-            return
-        status, _results = self._respond(req, _REQUEST_TIMEOUT, dismiss_picker=True)
-        if status != 0:
-            self._on_status(
-                f"screen: SelectSources returned status {status} "
-                "(picker canceled/dismissed?)"
-            )
-            return
+        #
+        # The portal has no "capture output N" option on Hyprland, so the only
+        # way to avoid the display picker is to replay the restore token the
+        # portal handed us last time (persist_mode=2). After the first grant we
+        # keep that token, and every later run goes straight to the same
+        # display - no picker, no prompt. If the token is rejected (revoked,
+        # portal restarted) we drop it and fall back to the picker once.
+        output = first_output_name()
+        if output:
+            self._on_status(f"screen: target output {output}")
+
+        if not self._select_sources(proxy, _load_restore_token()):
+            if _load_restore_token() is not None:
+                self._on_status("screen: saved display grant expired, re-selecting")
+                _forget_restore_token()
+                if not self._select_sources(proxy, None):
+                    return
+            else:
+                return
 
         # 3. Start ----------------------------------------------------------
         opts = {"handle_token": GLib.Variant("s", uuid.uuid4().hex)}
@@ -269,6 +365,13 @@ class ScreenCapture:
         if status != 0:
             self._on_status(f"screen: Start failed (status {status})")
             return
+
+        # Remember the grant so the next start skips the picker entirely.
+        token = results.get("restore_token")
+        if token:
+            _save_restore_token(token)
+            self._on_status("screen: display choice saved, no picker next time")
+
         streams = results.get("streams") or ()
         if not streams:
             self._on_status("screen: Start returned no streams")
@@ -294,6 +397,38 @@ class ScreenCapture:
             target=self._capture_loop, name="screen-capture", daemon=True
         )
         self._capture_thread.start()
+
+    def _select_sources(self, proxy, restore_token: str | None) -> bool:
+        """Run SelectSources, optionally replaying a stored grant."""
+        opts = {
+            "handle_token": GLib.Variant("s", uuid.uuid4().hex),
+            "types": GLib.Variant("u", 1),          # 1 = MONITOR
+            "multiple": GLib.Variant("b", False),
+            "persist_mode": GLib.Variant("u", 2),   # remember the choice
+        }
+        if restore_token:
+            opts["restore_token"] = GLib.Variant("s", restore_token)
+            self._on_status("screen: reusing the display you already shared")
+        else:
+            self._on_status(
+                "screen: requesting the first display (picker accepted automatically)"
+            )
+
+        req = self._call(
+            proxy, "SelectSources", "(oa{sv})", (self._session_handle, opts)
+        )
+        if req is None:
+            return False
+        # The picker only appears on the first grant; dismiss_picker is a
+        # harmless no-op when it never shows up.
+        status, _results = self._respond(req, _REQUEST_TIMEOUT, dismiss_picker=True)
+        if status != 0:
+            self._on_status(
+                f"screen: SelectSources returned status {status} "
+                "(picker canceled/dismissed?)"
+            )
+            return False
+        return True
 
     def _proxy(self, object_path, iface):
         return Gio.DBusProxy.new_sync(

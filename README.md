@@ -150,10 +150,26 @@ accepts touch/keyboard input. This is Wayland-native only (no X11):
 - **Screen capture:** XDG ScreenCast portal + PipeWire, ~5 fps, newest-frame-
   wins so slow networks cannot build up unbounded frame queues. The capture
   runs in its own thread/GLib context and never blocks the command path.
-  Hyprland's portal reopens the monitor share-picker on every session, so the
-  agent auto-accepts it (clicks the picker's Select button through its own
-  virtual pointer once). `screen.request` start/stop, `screen.status`, and
-  binary `screen.frame` (jpeg) messages; control messages include frames.
+  Hyprland normally reopens the monitor share-picker on every session, so
+  `remote_control_laptop/hypr_auto_picker.py` is registered as the portal's
+  `custom_picker_binary`: it selects the first enabled output (override with
+  `RC_SCREENCAST_OUTPUT=<name>`) and asks the portal for a restore token, so no
+  dialog appears at all and later sessions reuse the same display. Enable it
+  once per host:
+
+  ```bash
+  remote_control_laptop/hypr_auto_picker.py --install
+  systemctl --user restart xdg-desktop-portal-hyprland.service
+  ```
+
+  The agent stores that token (mode 0600) under
+  `$XDG_STATE_HOME/remote-control-laptop/screencast-token`, retries once if the
+  portal rejects it, and keeps the old fallback that clicks the picker's Select
+  button through its own virtual pointer when the custom picker is not
+  installed. To go back to Hyprland's own picker, delete the
+  `screencopy:custom_picker_binary` line from `~/.config/hypr/xdph.conf` and
+  restart the backend. `screen.request` start/stop, `screen.status`, and binary
+  `screen.frame` (jpeg) messages; control messages include frames.
 - **Pointer:** normalized 0.0-1.0 coordinates so any phone/laptop resolution
   maps exactly. Touch moves the pointer; touch release = left click; right and
   middle clicks are supported by the input server.
