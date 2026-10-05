@@ -235,7 +235,7 @@ form.addEventListener("submit", (event) => {
   phonePublicKey = await publicKeyHex(keyPair);
 
   if (!isPaired(relayHost) && !PAIR_TOKEN) {
-    addLine("✗ Set PAIR_TOKEN in config.js to pair this phone", true);
+    addLine("✗ PAIR_TOKEN env var not set: redeploy with it configured to pair this phone", true);
     return;
   }
 

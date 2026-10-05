@@ -1,3 +1,6 @@
 # env keys
 config.js
 ./config.js
+
+# deploy-time build output (generated from Vercel env vars)
+dist/

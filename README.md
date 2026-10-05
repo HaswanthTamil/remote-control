@@ -139,6 +139,19 @@ Set `SERVER_URL` and the same `PAIR_TOKEN` in `remote_control_phone/config.js`.
 On first open the page generates an Ed25519 keypair (stored in `localStorage`)
 and pairs automatically. Afterward you can delete the `PAIR_TOKEN` value.
 
+`config.js` is gitignored - it never reaches the repository. For a Vercel
+deployment (git-synced), add a `vercel.json`-driven build instead:
+
+1. Create a Vercel project with **Root Directory = `remote_control_phone`**.
+2. Set two environment variables on that project:
+   - `PAIR_TOKEN` - the same one-time pairing token as the relay,
+   - `SERVER_URL` - the relay URL
+     (defaults to `wss://remote-control-lmxu.vercel.app/` if unset).
+3. The `buildCommand` (`node build.js`) inlines those env vars directly into
+   the JS modules, so the deployed site has no `config.js` at all (and never
+   404s on it) and the secret lives only in Vercel's env store, never in git.
+   Redeploy after changing either value.
+
 Only one phone and one laptop are connected at a time; a newer connection for
 the same device replaces the old one.
 

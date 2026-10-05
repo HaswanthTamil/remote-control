@@ -616,7 +616,7 @@ window.addEventListener("resize", () => {
   phonePublicKey = await publicKeyHex(keyPair);
 
   if (!isPaired(relayHost) && !PAIR_TOKEN) {
-    hint.textContent = "Set PAIR_TOKEN in config.js to pair this phone";
+    hint.textContent = "PAIR_TOKEN env var not set: redeploy with it configured to pair this phone";
     return;
   }
 
